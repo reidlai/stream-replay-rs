@@ -1,5 +1,7 @@
 # stream-replay-rs
 
+[← Back to FerrousCX Root Architecture](https://github.com/reidlai/ferrous-cx)
+
 [![Crate Type: Rust Binary & Library](https://img.shields.io/badge/crate-bin%20%2B%20lib-blue.svg)](https://github.com/reidlai/stream-replay-rs)
 [![License: MIT/Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-green.svg)](LICENSE)
 [![DevSecOps CI](https://img.shields.io/badge/DevSecOps%20CI-Passing-brightgreen.svg)](.github/workflows/devsecops-ci.yml)

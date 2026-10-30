@@ -15,4 +15,3 @@ pub use error::ReplayError;
 pub use reader::{create_reader, CsvRecordReader, ParquetRecordReader, RecordReader, ReplayRecord};
 pub use sink::{create_sink, Sink, SinkType};
 pub use time_shift::{parse_timestamp, TimeShiftEngine};
-

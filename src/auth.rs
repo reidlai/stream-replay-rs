@@ -56,7 +56,10 @@ impl M2MAuthenticator {
         // If a direct token is provided, validate it
         if let Some(ref t) = self.token {
             self.is_authenticated = true;
-            info!("M2M Service account '{}' authenticated via bearer token", self.service_account);
+            info!(
+                "M2M Service account '{}' authenticated via bearer token",
+                self.service_account
+            );
             return Ok(t.clone());
         }
 
@@ -68,11 +71,7 @@ impl M2MAuthenticator {
             );
             // Simulated live token generation based on Kanidm client credentials
             let secret_prefix: String = secret.chars().take(8).collect();
-            let live_token = format!(
-                "kanidm_m2m_{}_{}",
-                self.service_account,
-                secret_prefix
-            );
+            let live_token = format!("kanidm_m2m_{}_{}", self.service_account, secret_prefix);
             self.token = Some(live_token.clone());
             self.is_authenticated = true;
             return Ok(live_token);
@@ -107,4 +106,3 @@ impl M2MAuthenticator {
         self.token.as_ref().map(|t| format!("Bearer {t}"))
     }
 }
-

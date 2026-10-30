@@ -111,7 +111,10 @@ async fn test_500_order_micro_burst_under_one_second() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 500);
@@ -145,7 +148,10 @@ async fn test_burst_zero_boundary() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 0);
@@ -158,12 +164,7 @@ async fn test_engine_replay_across_speed_multipliers() {
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "order_id,order_purchase_timestamp,data").unwrap();
     for i in 0..10 {
-        writeln!(
-            tmp,
-            "ord_{i},2026-01-01T00:00:00.{:03}Z,payload_{i}",
-            i * 5
-        )
-        .unwrap();
+        writeln!(tmp, "ord_{i},2026-01-01T00:00:00.{:03}Z,payload_{i}", i * 5).unwrap();
     }
     let path = tmp.path().to_path_buf();
 
@@ -179,7 +180,10 @@ async fn test_engine_replay_across_speed_multipliers() {
         .build()
         .unwrap();
 
-    let mut engine_max = ReplayEngine::new(config_max).await.unwrap().with_sink(sink_max.clone());
+    let mut engine_max = ReplayEngine::new(config_max)
+        .await
+        .unwrap()
+        .with_sink(sink_max.clone());
     let stats_max = engine_max.run().await.unwrap();
     assert_eq!(stats_max.total_records, 10);
     assert_eq!(stats_max.partition_offsets, 10);
@@ -197,7 +201,10 @@ async fn test_engine_replay_across_speed_multipliers() {
         .build()
         .unwrap();
 
-    let mut engine_50x = ReplayEngine::new(config_50x).await.unwrap().with_sink(sink_50x.clone());
+    let mut engine_50x = ReplayEngine::new(config_50x)
+        .await
+        .unwrap()
+        .with_sink(sink_50x.clone());
     let stats_50x = engine_50x.run().await.unwrap();
     assert_eq!(stats_50x.total_records, 10);
     assert_eq!(stats_50x.partition_offsets, 10);
@@ -214,7 +221,10 @@ async fn test_engine_replay_across_speed_multipliers() {
         .build()
         .unwrap();
 
-    let mut engine_10x = ReplayEngine::new(config_10x).await.unwrap().with_sink(sink_10x.clone());
+    let mut engine_10x = ReplayEngine::new(config_10x)
+        .await
+        .unwrap()
+        .with_sink(sink_10x.clone());
     let stats_10x = engine_10x.run().await.unwrap();
     assert_eq!(stats_10x.total_records, 10);
     assert_eq!(stats_10x.partition_offsets, 10);

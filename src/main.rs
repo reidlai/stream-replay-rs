@@ -210,8 +210,13 @@ async fn main() {
             && file_path.to_string_lossy().contains("olist")
             && file_path.extension().is_none_or(|ext| ext == "parquet")
         {
-            info!("Target Olist dataset {:?} does not exist. Auto-generating 1,000 orders...", file_path);
-            if let Err(e) = stream_replay_rs::data_generator::generate_olist_orders_parquet(&file_path, 1000) {
+            info!(
+                "Target Olist dataset {:?} does not exist. Auto-generating 1,000 orders...",
+                file_path
+            );
+            if let Err(e) =
+                stream_replay_rs::data_generator::generate_olist_orders_parquet(&file_path, 1000)
+            {
                 error!("Failed to generate sample Olist dataset: {e}");
             }
         }
@@ -270,4 +275,3 @@ async fn main() {
         }
     }
 }
-

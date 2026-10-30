@@ -29,4 +29,3 @@ pub enum ReplayError {
     #[error("Dataset error: {0}")]
     Dataset(String),
 }
-

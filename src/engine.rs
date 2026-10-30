@@ -88,7 +88,8 @@ impl ReplayEngine {
             Err(e) => {
                 warn!("Could not compute dataset bounds: {e}. Defaulting duration to 1 hour.");
                 let now = Utc::now();
-                self.time_engine.set_dataset_bounds(now, now + chrono::Duration::hours(1));
+                self.time_engine
+                    .set_dataset_bounds(now, now + chrono::Duration::hours(1));
             }
         }
 
@@ -142,7 +143,12 @@ impl ReplayEngine {
                         serde_json::Value::String(emitted_time.to_rfc3339()),
                     );
                     if let Some(ref k) = record.key {
-                        if let Some(k_col) = self.config.key_column.as_ref().or(record.key_source_column.as_ref()) {
+                        if let Some(k_col) = self
+                            .config
+                            .key_column
+                            .as_ref()
+                            .or(record.key_source_column.as_ref())
+                        {
                             map.insert(k_col.clone(), serde_json::Value::String(k.clone()));
                         }
                     }
@@ -156,9 +162,11 @@ impl ReplayEngine {
                         }
                     } else if self.config.speed_multiplier > 0.0 {
                         if let (Some(t_first), Some(i_first)) = (first_emitted, first_instant) {
-                            let dataset_elapsed = (emitted_time - t_first).num_microseconds().unwrap_or(0);
+                            let dataset_elapsed =
+                                (emitted_time - t_first).num_microseconds().unwrap_or(0);
                             if dataset_elapsed > 0 {
-                                let scaled_micros = (dataset_elapsed as f64 / self.config.speed_multiplier) as u64;
+                                let scaled_micros =
+                                    (dataset_elapsed as f64 / self.config.speed_multiplier) as u64;
                                 let actual_elapsed_micros = i_first.elapsed().as_micros() as u64;
                                 if scaled_micros > actual_elapsed_micros {
                                     let diff = scaled_micros - actual_elapsed_micros;
@@ -247,4 +255,3 @@ impl ReplayEngine {
         })
     }
 }
-

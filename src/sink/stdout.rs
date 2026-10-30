@@ -36,7 +36,12 @@ impl StdoutSink {
 
 #[async_trait]
 impl Sink for StdoutSink {
-    async fn send(&self, topic: &str, key: Option<&str>, payload: &[u8]) -> Result<(), ReplayError> {
+    async fn send(
+        &self,
+        topic: &str,
+        key: Option<&str>,
+        payload: &[u8],
+    ) -> Result<(), ReplayError> {
         let key_str = key.unwrap_or("none");
         let payload_str = String::from_utf8_lossy(payload);
 
@@ -46,7 +51,11 @@ impl Sink for StdoutSink {
 
         let mut rec = self.recorded_messages.lock().unwrap();
         if rec.len() < 5000 {
-            rec.push((topic.to_string(), key.map(|s| s.to_string()), payload.to_vec()));
+            rec.push((
+                topic.to_string(),
+                key.map(|s| s.to_string()),
+                payload.to_vec(),
+            ));
         }
 
         Ok(())
@@ -56,4 +65,3 @@ impl Sink for StdoutSink {
         Ok(())
     }
 }
-

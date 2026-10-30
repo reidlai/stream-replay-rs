@@ -112,4 +112,3 @@ pub fn generate_olist_orders_parquet(path: &Path, count: usize) -> Result<(), Re
 
     Ok(())
 }
-

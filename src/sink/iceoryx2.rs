@@ -17,7 +17,12 @@ impl Iceoryx2Sink {
 
 #[async_trait]
 impl Sink for Iceoryx2Sink {
-    async fn send(&self, topic: &str, key: Option<&str>, payload: &[u8]) -> Result<(), ReplayError> {
+    async fn send(
+        &self,
+        topic: &str,
+        key: Option<&str>,
+        payload: &[u8],
+    ) -> Result<(), ReplayError> {
         info!(
             service = %self.service_name,
             topic = %topic,
@@ -36,4 +41,3 @@ impl Sink for Iceoryx2Sink {
 pub async fn create_iceoryx2_sink(service_name: &str) -> Result<Box<dyn Sink>, ReplayError> {
     Ok(Box::new(Iceoryx2Sink::new(service_name)))
 }
-

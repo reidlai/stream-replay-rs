@@ -1,5 +1,5 @@
-use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use crate::error::ReplayError;
+use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 
 pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, ReplayError> {
     let trimmed = s.trim();
@@ -30,7 +30,10 @@ pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, ReplayError> {
         // Guess scale by magnitude
         if ts > 1_000_000_000_000_000_000 {
             // Nanoseconds
-            if let Some(dt) = Utc.timestamp_opt(ts / 1_000_000_000, (ts % 1_000_000_000) as u32).single() {
+            if let Some(dt) = Utc
+                .timestamp_opt(ts / 1_000_000_000, (ts % 1_000_000_000) as u32)
+                .single()
+            {
                 return Ok(dt);
             }
         } else if ts > 1_000_000_000_000_000 {
@@ -51,7 +54,9 @@ pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>, ReplayError> {
         }
     }
 
-    Err(ReplayError::TimestampParse(format!("Cannot parse timestamp: '{s}'")))
+    Err(ReplayError::TimestampParse(format!(
+        "Cannot parse timestamp: '{s}'"
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -154,4 +159,3 @@ impl TimeShiftEngine {
         }
     }
 }
-

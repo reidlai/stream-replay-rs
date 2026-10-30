@@ -27,13 +27,22 @@ impl KafkaSink {
     }
 
     pub async fn connect(&mut self) -> Result<(), ReplayError> {
-        info!("Connecting to Kafka broker/Iggy gateway at {}", self.broker_url);
+        info!(
+            "Connecting to Kafka broker/Iggy gateway at {}",
+            self.broker_url
+        );
         // Clean broker host/port string
-        let addr = self.broker_url.trim_start_matches("kafka://").trim_start_matches("tcp://");
+        let addr = self
+            .broker_url
+            .trim_start_matches("kafka://")
+            .trim_start_matches("tcp://");
         match TcpStream::connect(addr).await {
             Ok(_stream) => {
                 self.connected = true;
-                info!("Successfully established TCP connection to Kafka gateway at {}", addr);
+                info!(
+                    "Successfully established TCP connection to Kafka gateway at {}",
+                    addr
+                );
                 Ok(())
             }
             Err(e) => {
@@ -54,7 +63,12 @@ impl KafkaSink {
 
 #[async_trait]
 impl Sink for KafkaSink {
-    async fn send(&self, topic: &str, key: Option<&str>, payload: &[u8]) -> Result<(), ReplayError> {
+    async fn send(
+        &self,
+        topic: &str,
+        key: Option<&str>,
+        payload: &[u8],
+    ) -> Result<(), ReplayError> {
         let current_offset = self.offset_counter.fetch_add(1, Ordering::SeqCst);
         let key_str = key.unwrap_or("none");
 
@@ -82,7 +96,10 @@ impl Sink for KafkaSink {
     }
 }
 
-pub async fn create_kafka_sink(broker_url: &str, topic: &str) -> Result<Box<dyn Sink>, ReplayError> {
+pub async fn create_kafka_sink(
+    broker_url: &str,
+    topic: &str,
+) -> Result<Box<dyn Sink>, ReplayError> {
     let mut sink = KafkaSink::new(broker_url, topic);
     let _ = sink.connect().await;
     Ok(Box::new(sink))

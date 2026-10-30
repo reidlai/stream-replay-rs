@@ -72,7 +72,10 @@ fn test_multi_loop_monotonic_time_advance() {
 
     // Loop 1 start must be after Loop 0 end
     assert!(emitted_l1_start >= emitted_l0_end);
-    assert_eq!((emitted_l1_start - emitted_l0_start).num_seconds(), dataset_duration.num_seconds());
+    assert_eq!(
+        (emitted_l1_start - emitted_l0_start).num_seconds(),
+        dataset_duration.num_seconds()
+    );
     assert!(emitted_l1_end > emitted_l1_start);
 
     // Advance to Loop 2
@@ -116,4 +119,3 @@ fn test_monotonicity_with_out_of_order_raw_data() {
     // Must still advance monotonically by at least 1ns
     assert!(emitted1 > emitted0);
 }
-

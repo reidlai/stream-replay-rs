@@ -24,7 +24,10 @@ async fn test_m2m_auth_custom_bearer_token() {
     let token = auth.authenticate().await.unwrap();
     assert_eq!(token, "pre_issued_kanidm_token_xyz");
     assert!(auth.is_authenticated);
-    assert_eq!(auth.auth_header(), Some("Bearer pre_issued_kanidm_token_xyz".to_string()));
+    assert_eq!(
+        auth.auth_header(),
+        Some("Bearer pre_issued_kanidm_token_xyz".to_string())
+    );
 }
 
 #[tokio::test]
@@ -41,4 +44,3 @@ async fn test_m2m_auth_client_secret_exchange() {
     assert!(auth.is_authenticated);
     assert_eq!(DEFAULT_SCOPE, "stream:produce:intake telemetry:write");
 }
-

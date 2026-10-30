@@ -32,7 +32,11 @@ pub struct CsvRecordReader {
 }
 
 impl CsvRecordReader {
-    pub fn new(path: &Path, timestamp_col: &str, key_col: Option<&str>) -> Result<Self, ReplayError> {
+    pub fn new(
+        path: &Path,
+        timestamp_col: &str,
+        key_col: Option<&str>,
+    ) -> Result<Self, ReplayError> {
         let file = File::open(path)?;
         let mut csv_reader = csv::ReaderBuilder::new()
             .has_headers(true)
@@ -86,7 +90,8 @@ impl RecordReader for CsvRecordReader {
                 let json_val = if let Ok(num) = val_str.parse::<i64>() {
                     Value::Number(num.into())
                 } else if let Ok(flt) = val_str.parse::<f64>() {
-                    serde_json::Number::from_f64(flt).map_or(Value::String(val_str.to_string()), Value::Number)
+                    serde_json::Number::from_f64(flt)
+                        .map_or(Value::String(val_str.to_string()), Value::Number)
                 } else if let Ok(b) = val_str.parse::<bool>() {
                     Value::Bool(b)
                 } else {
@@ -163,7 +168,11 @@ pub struct ParquetRecordReader {
 }
 
 impl ParquetRecordReader {
-    pub fn new(path: &Path, timestamp_col: &str, key_col: Option<&str>) -> Result<Self, ReplayError> {
+    pub fn new(
+        path: &Path,
+        timestamp_col: &str,
+        key_col: Option<&str>,
+    ) -> Result<Self, ReplayError> {
         let file = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
         let schema = builder.schema();
@@ -259,7 +268,8 @@ impl ParquetRecordReader {
                 DataType::Float32 => {
                     let arr = col.as_primitive::<arrow::datatypes::Float32Type>();
                     let v = arr.value(row);
-                    let num = serde_json::Number::from_f64(v as f64).map_or(Value::Null, Value::Number);
+                    let num =
+                        serde_json::Number::from_f64(v as f64).map_or(Value::Null, Value::Number);
                     (num, Some(v.to_string()))
                 }
                 DataType::Timestamp(unit, _) => {
@@ -269,24 +279,31 @@ impl ParquetRecordReader {
                             Utc.timestamp_opt(arr.value(row), 0).single()
                         }
                         arrow::datatypes::TimeUnit::Millisecond => {
-                            let arr = col.as_primitive::<arrow::datatypes::TimestampMillisecondType>();
+                            let arr =
+                                col.as_primitive::<arrow::datatypes::TimestampMillisecondType>();
                             Utc.timestamp_millis_opt(arr.value(row)).single()
                         }
                         arrow::datatypes::TimeUnit::Microsecond => {
-                            let arr = col.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
+                            let arr =
+                                col.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
                             Utc.timestamp_micros(arr.value(row)).single()
                         }
                         arrow::datatypes::TimeUnit::Nanosecond => {
-                            let arr = col.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
+                            let arr =
+                                col.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
                             let v = arr.value(row);
-                            Utc.timestamp_opt(v / 1_000_000_000, (v % 1_000_000_000) as u32).single()
+                            Utc.timestamp_opt(v / 1_000_000_000, (v % 1_000_000_000) as u32)
+                                .single()
                         }
                     };
                     let dt_val = dt.unwrap_or_else(Utc::now);
                     if col_name == timestamp_col {
                         raw_timestamp = Some(dt_val);
                     }
-                    (Value::String(dt_val.to_rfc3339()), Some(dt_val.to_rfc3339()))
+                    (
+                        Value::String(dt_val.to_rfc3339()),
+                        Some(dt_val.to_rfc3339()),
+                    )
                 }
                 DataType::Boolean => {
                     let arr = col.as_boolean();
@@ -442,4 +459,3 @@ pub fn create_reader(
         ))),
     }
 }
-

@@ -59,4 +59,3 @@ async fn test_sink_factory_creation() {
     .await;
     assert!(s_iceoryx2.is_ok());
 }
-

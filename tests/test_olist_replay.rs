@@ -29,7 +29,10 @@ async fn test_olist_parquet_generation_and_schema() {
         .unwrap();
 
     let sink = Arc::new(StdoutSink::new_silent("orders/intake"));
-    let mut engine = ReplayEngine::new(config.clone()).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config.clone())
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 5);
@@ -72,7 +75,10 @@ async fn test_olist_streaming_into_kafka_iggy_with_m2m_auth() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(kafka_sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(kafka_sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 30);
@@ -105,7 +111,10 @@ async fn test_olist_loop_salting_into_kafka_sink() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config.clone()).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config.clone())
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 20);
@@ -122,7 +131,10 @@ async fn test_olist_loop_salting_into_kafka_sink() {
 
     // Also verify KafkaSink partition offset advancement across multi-loop replay
     let kafka_sink = Arc::new(KafkaSink::new("localhost:9092", "orders/intake"));
-    let mut engine_kafka = ReplayEngine::new(config).await.unwrap().with_sink(kafka_sink.clone());
+    let mut engine_kafka = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(kafka_sink.clone());
     let stats_kafka = engine_kafka.run().await.unwrap();
     assert_eq!(stats_kafka.total_records, 20);
     assert_eq!(kafka_sink.last_offset(), 20);
@@ -137,7 +149,10 @@ async fn test_packaged_olist_orders_parquet_replay() {
         // Generate packaged dataset if running from test harness before first CLI launch
         generate_olist_orders_parquet(path, 50).unwrap();
     }
-    assert!(path.exists(), "Flagship dataset data/olist_orders.parquet must exist");
+    assert!(
+        path.exists(),
+        "Flagship dataset data/olist_orders.parquet must exist"
+    );
 
     let kafka_sink = Arc::new(KafkaSink::new("localhost:9092", "orders/intake"));
 
@@ -151,7 +166,10 @@ async fn test_packaged_olist_orders_parquet_replay() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(kafka_sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(kafka_sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 15);

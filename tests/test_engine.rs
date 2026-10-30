@@ -26,7 +26,10 @@ async fn test_engine_csv_replay_end_to_end() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 3);
@@ -71,7 +74,10 @@ async fn test_engine_burst_mode() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 5);
@@ -142,7 +148,10 @@ async fn test_engine_loop_playback_salting_and_advance() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 4);
@@ -214,7 +223,10 @@ async fn test_engine_parquet_replay() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 2);
@@ -227,7 +239,11 @@ async fn test_engine_parquet_replay() {
 #[tokio::test]
 async fn test_engine_rate_pacing() {
     let mut tmp = NamedTempFile::new().unwrap();
-    writeln!(tmp, "id,timestamp\n1,2026-10-30 00:00:00\n2,2026-10-30 00:00:01").unwrap();
+    writeln!(
+        tmp,
+        "id,timestamp\n1,2026-10-30 00:00:00\n2,2026-10-30 00:00:01"
+    )
+    .unwrap();
     tmp.flush().unwrap();
 
     let sink = Arc::new(StdoutSink::new_silent("rate/test"));
@@ -241,9 +257,11 @@ async fn test_engine_rate_pacing() {
         .build()
         .unwrap();
 
-    let mut engine = ReplayEngine::new(config).await.unwrap().with_sink(sink.clone());
+    let mut engine = ReplayEngine::new(config)
+        .await
+        .unwrap()
+        .with_sink(sink.clone());
     let stats = engine.run().await.unwrap();
 
     assert_eq!(stats.total_records, 2);
 }
-

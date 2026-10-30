@@ -107,7 +107,11 @@ fn test_parquet_reader_native_timestamp_and_nulls() {
     let tmp = NamedTempFile::new().unwrap();
     let schema = Arc::new(Schema::new(vec![
         Field::new("order_id", DataType::Utf8, false),
-        Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("amount", DataType::Int64, true),
     ]));
 
@@ -142,4 +146,3 @@ fn test_parquet_reader_native_timestamp_and_nulls() {
     assert_eq!(r1.timestamp, t0);
     assert_eq!(r2.timestamp, t_last);
 }
-

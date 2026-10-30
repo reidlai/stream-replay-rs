@@ -19,7 +19,12 @@ impl NatsSink {
 
 #[async_trait]
 impl Sink for NatsSink {
-    async fn send(&self, topic: &str, key: Option<&str>, payload: &[u8]) -> Result<(), ReplayError> {
+    async fn send(
+        &self,
+        topic: &str,
+        key: Option<&str>,
+        payload: &[u8],
+    ) -> Result<(), ReplayError> {
         info!(
             target_topic = %topic,
             key = ?key,
@@ -37,4 +42,3 @@ impl Sink for NatsSink {
 pub async fn create_nats_sink(url: &str, topic: &str) -> Result<Box<dyn Sink>, ReplayError> {
     Ok(Box::new(NatsSink::new(url, topic)))
 }
-

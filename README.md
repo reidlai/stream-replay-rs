@@ -1,337 +1,267 @@
 # stream-replay-rs
 
-[← Back to FerrousCX Root Architecture](https://github.com/reidlai/ferrous-cx)
+> **Pure-Rust Streaming Traffic Simulator & Multi-Sink Replay Engine**  
+> Standalone, dataset-agnostic event replayer with microsecond monotonic time shifting, 10x playback acceleration, and interactive micro-burst stress testing.
 
-[![Crate Type: Rust Binary & Library](https://img.shields.io/badge/crate-bin%20%2B%20lib-blue.svg)](https://github.com/reidlai/stream-replay-rs)
-[![License: MIT/Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-green.svg)](LICENSE)
-[![DevSecOps CI](https://img.shields.io/badge/DevSecOps%20CI-Passing-brightgreen.svg)](.github/workflows/devsecops-ci.yml)
-[![Pre-Commit Enabled](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-config.yaml)
-[![Target: Kafka / NATS / Fluvio / iceoryx2](https://img.shields.io/badge/sinks-Kafka%20%7C%20NATS%20%7C%20Fluvio%20%7C%20iceoryx2-orange.svg)](#pluggable-streaming-sinks)
-
-**`stream-replay-rs`** is a generic, high-performance streaming traffic replay engine built in pure Rust. It transforms any historical or static dataset (**CSV** or **Parquet**) into a live, continuous event stream by reading records progressively, calculating relative transaction intervals with **nanosecond precision**, and shifting timestamps forward to anchor to the live replay start time.
-
-Delivered simultaneously as a standalone terminal CLI (`src/main.rs`) and an embeddable library crate (`src/lib.rs`), `stream-replay-rs` is completely **dataset-agnostic** and **broker-pluggable**. It allows engineers to stress-test real-time streaming architectures, event brokers, and lakehouse engines with authentic traffic dynamics while eliminating synthetic data generators and cross-language runtime overhead.
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](#-requirements--installation)
+[![Tier](https://img.shields.io/badge/DevSecOps-Tier%201%20Shift--Left-brightgreen.svg)](#-tier-1-devsecops--security-gate)
 
 ---
 
-## 🏛️ System Architecture
+## 🏛️ Architecture & C4 Topology
 
-`stream-replay-rs` acts as a generic streaming ingestion harness across distributed event platforms:
+`stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **FerrousCX** streaming architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
 
 ```mermaid
-flowchart LR
-    subgraph Storage ["Dataset Ingestion (Schema-Agnostic)"]
-        Dataset[("Static Dataset<br/>(CSV / Parquet)")]
+flowchart TD
+    subgraph Data Sources ["📁 Historical Data Sources"]
+        Parquet["Olist Orders Parquet<br/><code>data/olist_orders.parquet</code>"]
+        CSV["CSV Event Log<br/><code>events.csv</code>"]
     end
 
-    subgraph Engine ["stream-replay-rs (CLI & Library Crate)"]
-        Reader["Streaming Record Reader<br/>(Arrow / CSV Iterator)"]
-        TimeEngine["Nanosecond Time-Shift Engine<br/>Δt = t_i - T_0<br/>T_emit = Start + Δt"]
-        ProgressBar["Terminal Progress Bar<br/>(indicatif)"]
-        Dispatcher{"Sink Dispatcher"}
+    subgraph Core Engine ["⚙️ stream-replay-rs Engine"]
+        Reader["Arrow / Parquet / CSV Streaming Reader<br/>(&lt;35 MB RSS)"]
+        TimeEngine["Monotonic Time Shift Engine<br/><code>Δt = t_now + (loop × Δ_dataset)</code>"]
+        Salter["Entity ID Salter<br/><code>_L{n} Primary Key Salting</code>"]
+        RatePacer["Pacing &amp; Burst Controller<br/><code>10x Speed Default (~1 ord/min)</code>"]
+        Auth["Kanidm M2M Authenticator<br/><code>svc_stream_replay</code>"]
     end
 
-    subgraph Sinks ["Pluggable Message Brokers & IPC"]
-        Kafka[("Apache Kafka / Redpanda / Iggy<br/>(Kafka Protocol: Port 9092)")]
-        NATS[("NATS JetStream<br/>(NATS Protocol: Port 4222)")]
-        Fluvio[("Fluvio Cluster<br/>(Fluvio Protocol: Port 9003)")]
-        Iceoryx2[("Eclipse iceoryx2<br/>(Zero-Copy Shared-Memory IPC)")]
+    subgraph Pluggable Sinks ["📡 Pluggable Multi-Sink Architecture"]
+        KafkaSink["Apache Iggy / Kafka Gateway<br/><code>orders/intake (port 9092)</code>"]
+        NATSSink["NATS JetStream<br/><code>events (port 4222)</code>"]
+        FluvioSink["Fluvio Broker<br/><code>events (port 9003)</code>"]
+        IceoryxSink["Eclipse iceoryx2<br/><code>Zero-Copy Shared Memory IPC</code>"]
+        StdoutSink["Terminal Stdout<br/><code>Inspection &amp; Diagnostics</code>"]
     end
 
-    subgraph Consumers ["Downstream Streaming Ecosystem"]
-        ConsumersGroup["Stream Processors & Lakehouses<br/>(Flink, Arroyo, Spark, Delta Lake)"]
+    subgraph Downstream Ecosystem ["🌊 FerrousCX Streaming Platform"]
+        IggyBroker["Apache Iggy Broker<br/><code>&lt;1ms fsync commit log</code>"]
+        Arroyo["Arroyo 2PC Stream Engine<br/><code>Sub-second window aggregations</code>"]
+        DeltaLake["Delta Lake ACID Storage<br/><code>orders_raw_events &amp; state</code>"]
     end
 
-    Dataset --> Reader
+    Parquet --> Reader
+    CSV --> Reader
     Reader --> TimeEngine
-    TimeEngine --> ProgressBar
-    TimeEngine --> Dispatcher
-    Dispatcher -->|Kafka Protocol| Kafka
-    Dispatcher -->|NATS Protocol| NATS
-    Dispatcher -->|Fluvio Protocol| Fluvio
-    Dispatcher -->|Zero-Copy IPC| Iceoryx2
-    Kafka --> ConsumersGroup
-    NATS --> ConsumersGroup
-    Fluvio --> ConsumersGroup
-    Iceoryx2 --> ConsumersGroup
+    TimeEngine --> Salter
+    Salter --> RatePacer
+    Auth -.->|"OAuth2 Token Exchange"| RatePacer
+
+    RatePacer --> KafkaSink
+    RatePacer --> NATSSink
+    RatePacer --> FluvioSink
+    RatePacer --> IceoryxSink
+    RatePacer --> StdoutSink
+
+    KafkaSink --> IggyBroker
+    IggyBroker --> Arroyo
+    Arroyo --> DeltaLake
 ```
 
-### Supported Streaming Transports
+---
 
-| Destination Sink | Default Port | Protocol | CLI Flag | Compatible Brokers & Targets |
-| :--- | :--- | :--- | :--- | :--- |
-| **Apache Kafka** | `9092` | Kafka Wire Protocol (TCP) | `--sink kafka` | Apache Kafka, Redpanda, Apache Iggy, WarpStream |
-| **NATS JetStream**| `4222` | NATS Client Protocol | `--sink nats` | NATS Core, NATS JetStream |
-| **Fluvio** | `9003` | Fluvio Native Protocol | `--sink fluvio`| Local Fluvio cluster, InfinyOn Cloud |
-| **Eclipse iceoryx2** | *Shared Memory* | Zero-Copy Shared-Memory IPC | `--sink iceoryx2` | Local pure-Rust IPC, ultra-low latency co-located consumers |
+## 📦 Requirements & Installation
+
+- **Rust Compiler**: Rust 1.80+ (MSRV)
+- **Pre-commit**: (optional, for local git hook enforcement) `pip install pre-commit && pre-commit install`
+- **Security Tools**: `cargo install cargo-deny cargo-audit`
 
 ---
 
-## ⚡ Key Capabilities
+## ⚡ Key Features
 
-1. **Dataset-Agnostic & Schema-Flexible:**
-   * Works out-of-the-box with **any CSV or Parquet dataset** containing a timestamp column (e.g. financial ticks, IoT telemetry, clickstreams, e-commerce orders, server logs).
-   * Automatically parses ISO 8601 strings, UNIX epoch seconds, milliseconds, microseconds, and nanoseconds.
-2. **Nanosecond Relative Timestamp Shifting:**
-   * Reads the baseline timestamp $T_0$ from the first record in the dataset.
-   * Anchors playback start time to live wall-clock time: $T_{\text{start}} = \text{Utc::now()}$.
-   * Computes the relative delta $\Delta t_i = t_i - T_0$ in nanoseconds for each subsequent record.
-   * Emits each record at $T_{\text{emit}} = T_{\text{start}} + \Delta t_i$, preserving authentic transaction bursts, quiet periods, and inter-arrival intervals without triggering watermark drops in downstream stream processors.
-3. **Dual Surface (Standalone CLI + Library Crate):**
-   * **CLI (`src/main.rs`):** Ready-to-run binary with rich argument parsing and interactive progress output.
-   * **Library (`src/lib.rs`):** Async Rust API for embedding controlled streaming traffic generation directly into integration test suites (`cargo test`) or custom benchmarking runners.
-4. **Minimal Memory Footprint:**
-   * Iterates record-by-record via Apache Arrow streaming reader and line-based CSV iterators, sustaining memory consumption below **35 MB RSS** regardless of dataset file size.
-5. **Interactive Console Progress Bar:**
-   * Built with `indicatif`, displaying real-time events/sec rate, total records dispatched, elapsed duration, and estimated completion time (ETA).
-6. **Playback Acceleration & Infinite Looping:**
-   * `--speed <multiplier>` (e.g. `10.0` for 10x accelerated replay).
-   * `--rate <events_per_sec>` (fixed throughput injection).
-   * `--loop`, `--advance-loop-timestamps`, and `--loop-id-salt` (`_L{n}`) to run infinite continuous replay loops without duplicate primary key collisions.
-7. **Profile-Driven Historical Streaming Configuration (`--config <path>`):**
-   * Encapsulates all historical data streaming requirements—dataset paths, timestamp columns, partition keys, playback acceleration, loop policies, and destination broker sinks—into version-controlled TOML profiles (e.g. `config/profiles/olist.toml`).
-   * Eliminates the need for downstream submodules to maintain traffic ingestion parameters.
+1. **Pure-Rust & Native Binary**: Zero Python or JVM dependencies. Compiles to an optimized standalone binary and an embeddable async Rust library.
+2. **Streaming Reader (<35 MB RSS)**: Bounded memory footprint leveraging Apache Arrow vector record batches and chunked CSV iterators (NFR-9).
+3. **Monotonic Timestamp Advancement**: Mathematically shifts historical event timestamps forward to the live wall-clock time. Looping iterations continuously advance time without negative deltas or backward jitter:
+   $$\text{Timestamp}_{\text{emitted}} = \text{Timestamp}_{\text{record}} + \Delta_{\text{now}} + (\text{loop\_count} \times \Delta_{\text{dataset}})$$
+4. **Loop Entity ID Salting**: Appends loop iteration markers (`_L1`, `_L2`) to entity primary keys (e.g. `order_id`) across infinite loops, preventing primary key deduplication collisions in downstream Delta Lake sinks.
+5. **Calibrated 10x Default Playback**:
+   - The flagship Brazilian Olist e-commerce dataset contains 100,000 orders spanning 730 days (1,051,200 minutes).
+   - Historical baseline rate: $\frac{100,000 \text{ orders}}{1,051,200 \text{ minutes}} \approx 0.095 \text{ orders/min}$.
+   - Accelerated by **10x**, the steady-state arrival rate is **~1 order/minute** ($\approx 0.95 \text{ orders/min}$), keeping platform intake queues actively populated during live human inspection.
+6. **Interactive Micro-Burst Testing**:
+   - Supports `--burst <N>` to instantly inject batches (e.g. `--burst 500` orders) without pacing delays in under 1 second (>500 msgs/s), validating backpressure and buffer stability in Apache Iggy and Arroyo (FR-30).
+7. **M2M Authentication**: Pre-flight Kanidm OAuth2 token exchange for `svc_stream_replay` (scopes: `stream:produce:intake`, `telemetry:write`) with offline fallback for disconnected development.
 
 ---
 
-## 🛠️ Standalone Developer Quickstart
+## 🚀 Quickstart
 
-`stream-replay-rs` can be cloned, built, and tested independently with zero external monorepo dependencies.
-
-### Prerequisites
-
-* **Rust:** `1.82+` (`rustup update stable`)
-* **Pre-commit (Optional for contributors):** `3.8+` (`pip install pre-commit` or `pipx install pre-commit`)
-
-### 1. Build and Test
-
+### 1. Build Native Binary
 ```bash
-# Clone the repository
-git clone https://github.com/reidlai/stream-replay-rs.git
-cd stream-replay-rs
-
-# Compile release binary and library
 cargo build --release
-
-# Run unit and integration tests
-cargo test --all-targets --verbose
 ```
 
-### 2. Install CLI Binary Globally
-
+### 2. Stream Flagship Olist Dataset to Apache Iggy (Kafka Gateway)
 ```bash
-cargo install --path .
-```
-
----
-
-## 💻 CLI Usage & Command Reference
-
-```text
-Usage: stream-replay-rs [OPTIONS] [--input-file-path <PATH> | --config <PATH>]
-
-Options:
-  -c, --config <PATH>                Path to replay profile configuration file (.toml)
-  -i, --input-file-path <PATH>       Path to CSV or Parquet dataset file
-  -f, --input-file-format <FORMAT>   File format: 'csv' or 'parquet' [default: auto-detect from extension]
-  -s, --sink <SINK>                  Target streaming sink: 'kafka', 'nats', 'fluvio', or 'iceoryx2' [default: kafka]
-  -u, --sink-url <URL>               Target broker connection URL [default: localhost:9092]
-  -t, --topic <TOPIC>                Destination topic or subject name [default: events]
-      --service-name <NAME>          Target iceoryx2 service name (when --sink iceoryx2) [default: stream_replay_events]
-      --speed <FLOAT>                Playback speed multiplier (e.g. 1.0 = real-time, 5.0 = 5x) [default: 1.0]
-  -r, --rate <INT>                   Fixed target injection rate in events/second (overrides speed)
-      --shift-timestamps             Shift relative timestamps anchoring first record to now [default: true]
-      --timestamp-column <NAME>      Timestamp column name in dataset [default: timestamp]
-      --loop                         Loop replay indefinitely upon reaching EOF
-      --advance-loop-timestamps      Monotonically advance timestamps on subsequent loop iterations
-      --loop-id-salt                 Append loop counter salt (_L1, _L2) to primary keys to prevent collisions
-      --progress                     Display terminal interactive progress bar [default: true]
-  -h, --help                         Print help
-  -V, --version                      Print version
-```
-
-### Example Commands
-
-#### 1. Replay with Centralized Configuration Profile:
-```bash
-# Execute historical streaming using the bundled Olist profile targeting Kafka/Iggy
-stream-replay-rs --config config/profiles/olist.toml
-
-# Override destination sink to NATS JetStream, Fluvio, or Eclipse iceoryx2 on the fly:
-stream-replay-rs --config config/profiles/olist.toml --sink nats --sink-url nats://localhost:4222
-stream-replay-rs --config config/profiles/olist.toml --sink fluvio --sink-url localhost:9003
-stream-replay-rs --config config/profiles/olist.toml --sink iceoryx2 --service-name olist_orders
-```
-
-#### 2. Replay Parquet Dataset to Kafka at 5x Speed (Manual CLI):
-```bash
-stream-replay-rs \
-  --input-file-path ./data/events.parquet \
-  --input-file-format parquet \
+# Streams 100k Brazilian e-commerce orders into Iggy on port 9092 at 10x speed (~1 order/min)
+./target/release/stream-replay-rs \
+  --input-file-path data/olist_orders.parquet \
   --sink kafka \
   --sink-url localhost:9092 \
-  --topic telemetry \
-  --timestamp-column event_time \
-  --speed 5.0
+  --topic orders/intake \
+  --speed 10x
 ```
 
-#### 2. Replay CSV Dataset to NATS JetStream at a Fixed Rate (200 events/sec):
+### 3. Run Micro-Burst Stress Test
 ```bash
-stream-replay-rs \
-  --input-file-path ./data/transactions.csv \
-  --input-file-format csv \
-  --sink nats \
-  --sink-url nats://localhost:4222 \
-  --topic orders.incoming \
-  --timestamp-column created_at \
-  --rate 200
+# Injects 500 events instantaneously (<1s, >500 msgs/s) to evaluate backpressure
+./target/release/stream-replay-rs \
+  --input-file-path data/olist_orders.parquet \
+  --sink kafka \
+  --sink-url localhost:9092 \
+  --topic orders/intake \
+  --burst 500
 ```
 
-#### 3. Continuous Looping Replay to Fluvio:
+### 4. Continuous Looping Simulation with Entity Salting
 ```bash
-stream-replay-rs \
-  --input-file-path ./data/sensor_readings.parquet \
-  --sink fluvio \
-  --sink-url localhost:9003 \
-  --topic sensor-stream \
+# Loops the dataset continuously with monotonic time advancement and ID salting (_L1, _L2)
+./target/release/stream-replay-rs \
+  --input-file-path data/olist_orders.parquet \
   --loop \
   --advance-loop-timestamps \
-  --loop-id-salt
-```
-
-#### 4. Ultra-Low Latency Zero-Copy Replay to Eclipse iceoryx2 IPC:
-```bash
-stream-replay-rs \
-  --input-file-path ./data/transactions.parquet \
-  --sink iceoryx2 \
-  --service-name market_stream \
-  --speed 1.0
+  --loop-id-salt \
+  --speed 50x
 ```
 
 ---
 
-## 📦 Using as a Rust Library (`lib.rs`)
+## 📚 Programmatic Library Usage
 
 Add `stream-replay-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-stream-replay-rs = { git = "https://github.com/reidlai/stream-replay-rs.git", features = ["kafka"] }
+stream-replay-rs = { path = "../stream-replay-rs", features = ["full"] }
+tokio = { version = "1.40", features = ["full"] }
 ```
 
-### Programmatic Replay Example
+Embed the `ReplayEngine` into your Rust microservice or test harness:
 
 ```rust
-use stream_replay_rs::{ReplayEngine, ReplayConfig, SinkType};
+use stream_replay_rs::config::ReplayConfig;
+use stream_replay_rs::engine::ReplayEngine;
 use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ReplayConfig::builder()
-        .file_path(PathBuf::from("./data/transactions.parquet"))
-        .timestamp_column("transaction_time")
-        .sink(SinkType::Kafka {
-            broker_url: "localhost:9092".into(),
-            topic: "financial-events".into(),
-        })
-        .speed_multiplier(2.0)
-        .shift_timestamps(true)
+        .file_path(PathBuf::from("data/olist_orders.parquet"))
+        .file_format("parquet")
+        .timestamp_column("order_purchase_timestamp")
+        .key_column("order_id")
+        .speed_multiplier(10.0) // 10x calibrated speed
+        .progress(false)
         .build()?;
 
     let mut engine = ReplayEngine::new(config).await?;
-    engine.run().await?;
-
+    let stats = engine.run().await?;
+    println!("Emitted {} records in {:.2?}", stats.total_records, stats.elapsed);
     Ok(())
 }
 ```
 
 ---
 
-## 🔌 Pluggable Sinks & Feature Flags
+## 🏷️ Cargo Features
 
-`stream-replay-rs` isolates transport drivers behind Cargo feature flags so library consumers only compile the client libraries they actually use:
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `kafka` | Apache Kafka / Apache Iggy gateway sink driver | No |
+| `nats` | NATS JetStream publish driver | No |
+| `fluvio` | Fluvio distributed streaming driver | No |
+| `iceoryx2` | Eclipse iceoryx2 zero-copy shared memory IPC driver | No |
+| `full` | Enables all sink drivers and protocols | No |
 
-| Feature Flag | Included Sink Drivers | Dependencies |
-| :--- | :--- | :--- |
-| `default` | `["kafka"]` | `rdkafka` |
-| `nats` | `["nats"]` | `async-nats` |
-| `fluvio` | `["fluvio"]` | `fluvio` |
-| `iceoryx2` | `["iceoryx2"]` | `iceoryx2` |
-| `full` | `["kafka", "nats", "fluvio", "iceoryx2"]` | All sink drivers enabled |
+---
 
-Build specific feature configurations:
+## 🛠️ CLI Options & Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config <PATH>` | `-c` | `None` | Path to profile TOML configuration file |
+| `--input-file-path <PATH>` | `-i` | `None` | Path to CSV or Parquet dataset file |
+| `--input-file-format <FMT>` | `-f` | Auto | File format (`csv` or `parquet`) |
+| `--sink <SINK>` | `-s` | `stdout` | Target sink: `kafka`, `nats`, `fluvio`, `iceoryx2`, `stdout` |
+| `--sink-url <URL>` | `-u` | `localhost:9092`| Broker connection URL |
+| `--topic <TOPIC>` | `-t` | `events` | Target topic or channel name |
+| `--service-name <NAME>` | | `stream_replay_events` | iceoryx2 service name |
+| `--speed <PRESET>` | | `10x` | Speed multiplier (`1x`, `10x`, `50x`, `max`, or float) |
+| `--rate <N>` | `-r` | `None` | Fixed event injection rate (events/second) |
+| `--shift-timestamps` | | `true` | Anchor first event timestamp to current wall-clock time |
+| `--timestamp-column <COL>` | | `timestamp` | Timestamp column name in dataset |
+| `--key-column <COL>` | | `None` | Entity ID/key column name (auto-detected for Olist) |
+| `--loop` | | `false` | Loop playback indefinitely upon reaching EOF |
+| `--advance-loop-timestamps`| | `false` | Advance timestamps monotonically on subsequent loops |
+| `--loop-id-salt` | | `false` | Append `_L{n}` salt to entity IDs on loop iterations |
+| `--progress` | | `true` | Display interactive progress bar |
+| `--burst <N>` | | `None` | Inject micro-burst of N events immediately without pacing |
+| `--auth-url <URL>` | | `None` | Kanidm authentication server URL |
+| `--svc-account <ID>` | | `svc_stream_replay` | Kanidm M2M service account ID |
+| `--svc-secret <SECRET>` | | `None` | Kanidm client secret for token exchange |
+| `--svc-token <TOKEN>` | | `None` | Pre-issued Kanidm bearer token |
+
+---
+
+## ⚙️ Profile Configuration (`profile.toml`)
+
+Reusable replay scenarios can be defined in TOML profiles:
+
+```toml
+input_file_path = "data/olist_orders.parquet"
+sink = "kafka"
+sink_url = "localhost:9092"
+topic = "orders/intake"
+speed = "10x"
+shift_timestamps = true
+timestamp_column = "order_purchase_timestamp"
+key_column = "order_id"
+loop_playback = true
+advance_loop_timestamps = true
+loop_id_salt = true
+
+# Kanidm M2M Credentials
+auth_url = "https://localhost:8443"
+service_account = "svc_stream_replay"
+service_secret = "m2m_stream_replay_secret_token"
+```
+
+Execute via profile:
 ```bash
-# Build with NATS only (lightweight, zero C-dependency)
-cargo build --release --no-default-features --features nats
-
-# Build with all sink transports enabled
-cargo build --release --features full
+stream-replay-rs --config profile.toml
 ```
 
 ---
 
-## 🛡️ DevSecOps & Quality Assurance
+## 🔒 Tier 1 DevSecOps & Security Gate
 
-`stream-replay-rs` enforces strict automated quality and security gates:
+In accordance with architectural decision **AD-13**, `stream-replay-rs` adheres to shift-left DevSecOps standards enforced entirely on local developer workstations with zero external GitHub Actions dependencies.
 
-* **Local Pre-Commit Guardrails (`.pre-commit-config.yaml`):**
-  - Code formatting: `cargo fmt --check`
-  - Strict linting: `cargo clippy --all-targets -- -D warnings`
-  - Secret detection: `gitleaks` scanning to prevent credential leakage
-  - File hygiene: Trailing whitespace, EOF newline, and large file rejection (>1MB)
-* **Tier 1 DevSecOps CI Pipeline (`.github/workflows/devsecops-ci.yml`):**
-  - **SCA (Supply Chain Security):** `cargo-audit` and `cargo-deny` scanning for vulnerable crates and license compliance.
-  - **SAST (Static Analysis):** `semgrep` with OWASP Top 10 rulesets.
-  - **Automated Testing:** `cargo test --all-targets` with `Swatinem/rust-cache` for rapid CI feedback.
+### Quality & Security Controls:
+- **Secret Detection**: `gitleaks` pre-commit scanning.
+- **Code Hygiene**: Strict `cargo fmt` and `cargo clippy --all-targets -- -D warnings`.
+- **License & Dependency Audits**: `cargo-deny` and `cargo-audit` policy verification.
+- **Performance & Testing**: 100% of unit and integration tests execute in <10 seconds.
 
-Run local pre-commit checks on all files:
+### Dual-Shell Audit Scripts:
+
+Both scripts provide complete cross-platform operational parity and return standard exit codes:
+
 ```bash
-pre-commit run --all-files
+# Linux / macOS / WSL
+./scripts/audit-and-scan.sh
 ```
 
----
-
-## ⚙️ Configuration & Environment Variables Reference
-
-| Environment Variable | CLI Flag Equivalent | Default Value | Description | Required |
-| :--- | :--- | :--- | :--- | :--- |
-| `REPLAY_FILE_PATH` | `-i, --input-file-path` | *None* | Path to CSV or Parquet input dataset | **Yes** |
-| `REPLAY_FILE_FORMAT` | `-f, --input-file-format` | `auto` | `csv` or `parquet` | No |
-| `REPLAY_SINK` | `-s, --sink` | `kafka` | `kafka`, `nats`, `fluvio`, or `iceoryx2` | No |
-| `REPLAY_SINK_URL` | `-u, --sink-url` | `localhost:9092` | Target broker connection URL | No |
-| `REPLAY_TOPIC` | `-t, --topic` | `events` | Destination topic or subject name | No |
-| `REPLAY_SERVICE_NAME` | `--service-name` | `stream_replay_events` | Destination iceoryx2 service name | No |
-| `REPLAY_SPEED` | `--speed` | `1.0` | Relative playback speed multiplier | No |
-| `REPLAY_RATE` | `-r, --rate` | *None* | Uniform events/sec injection rate | No |
-| `REPLAY_LOOP` | `--loop` | `false` | Enable infinite dataset replay loop | No |
-| `REPLAY_TIMESTAMP_COL` | `--timestamp-column` | `timestamp` | Column name used for relative delta calculation | No |
-
----
-
-## 🤝 Integration with FerrousCX Platform
-
-While `stream-replay-rs` is completely dataset-agnostic, it is utilized by the **FerrousCX** enterprise platform as its official streaming traffic simulator. In FerrousCX Release 1, the platform requires the **Brazilian E-Commerce (Olist)** dataset to simulate real-time e-commerce orders, delivery delays, and customer reviews into the Apache Iggy Write-Ahead Log (`ferrous-streaming`):
-
-```bash
-# Example: FerrousCX Olist Order Replay into Apache Iggy
-stream-replay-rs \
-  --input-file-path ../data/olist_orders.parquet \
-  --input-file-format parquet \
-  --timestamp-column order_purchase_timestamp \
-  --sink kafka \
-  --sink-url localhost:9092 \
-  --topic orders/intake \
-  --speed 10.0 \
-  --advance-loop-timestamps \
-  --loop-id-salt
+```powershell
+# Windows PowerShell
+pwsh ./scripts/audit-and-scan.ps1
 ```
 
 ---
 
 ## 📄 License
 
-Dual-licensed under either:
-* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-* MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Dual-licensed under the **MIT License** and **Apache License 2.0**.

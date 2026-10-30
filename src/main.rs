@@ -43,9 +43,9 @@ pub struct CliArgs {
     #[arg(long, default_value = "stream_replay_events")]
     pub service_name: String,
 
-    /// Playback speed multiplier (e.g. 1.0 = real-time, 10.0 = 10x)
-    #[arg(long, default_value_t = 1.0)]
-    pub speed: f64,
+    /// Playback speed multiplier (e.g. 1.0, 10x, 50x, max) [default: 10x]
+    #[arg(long)]
+    pub speed: Option<String>,
 
     /// Fixed target injection rate in events/second (overrides speed)
     #[arg(short, long)]
@@ -119,8 +119,16 @@ async fn main() {
                 if let Some(f) = args.input_file_format {
                     cfg.input_file_format = Some(f);
                 }
-                if args.speed != 1.0 {
-                    cfg.speed_multiplier = args.speed;
+                if let Some(ref speed_str) = args.speed {
+                    match stream_replay_rs::config::parse_speed_preset(speed_str) {
+                        Ok(parsed_speed) => {
+                            cfg.speed_multiplier = parsed_speed;
+                        }
+                        Err(e) => {
+                            error!("Invalid CLI --speed argument: {e}");
+                            exit(1);
+                        }
+                    }
                 }
                 if args.rate.is_some() {
                     cfg.rate = args.rate;
@@ -208,11 +216,20 @@ async fn main() {
             }
         }
 
+        let speed_str = args.speed.as_deref().unwrap_or("10x");
+        let speed_multiplier = match stream_replay_rs::config::parse_speed_preset(speed_str) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Invalid CLI --speed argument: {e}");
+                exit(1);
+            }
+        };
+
         ReplayConfig {
             input_file_path: file_path,
             input_file_format: args.input_file_format,
             sink,
-            speed_multiplier: args.speed,
+            speed_multiplier,
             rate: args.rate,
             shift_timestamps: args.shift_timestamps,
             timestamp_column: timestamp_col,
@@ -238,8 +255,8 @@ async fn main() {
         Ok(mut engine) => match engine.run().await {
             Ok(stats) => {
                 info!(
-                    "Replay finished successfully: {} records dispatched in {:.2?} (loops={})",
-                    stats.total_records, stats.elapsed, stats.loops_completed
+                    "Replay finished successfully: {} records dispatched in {:.2?} ({:.1} msgs/s, offsets={}, loops={})",
+                    stats.total_records, stats.elapsed, stats.records_per_sec, stats.partition_offsets, stats.loops_completed
                 );
             }
             Err(e) => {

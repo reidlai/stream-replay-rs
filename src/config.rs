@@ -5,6 +5,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SpeedSetting {
+    Number(f64),
+    Preset(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
     pub input_file_path: String,
     pub input_file_format: Option<String>,
@@ -14,7 +21,7 @@ pub struct ProfileConfig {
     pub sink_url: Option<String>,
     pub topic: Option<String>,
     pub service_name: Option<String>,
-    pub speed: Option<f64>,
+    pub speed: Option<SpeedSetting>,
     pub rate: Option<u64>,
     pub shift_timestamps: Option<bool>,
     pub loop_playback: Option<bool>,
@@ -47,6 +54,40 @@ pub struct ReplayConfig {
     pub auth_token: Option<String>,
 }
 
+pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
+    let s = val.trim().to_lowercase();
+    match s.as_str() {
+        "1x" | "1" => Ok(1.0),
+        "10x" | "10" => Ok(10.0),
+        "50x" | "50" => Ok(50.0),
+        "max" | "unthrottled" | "0" | "0x" => Ok(0.0),
+        other => {
+            let clean = if let Some(stripped) = other.strip_suffix('x') {
+                stripped.trim()
+            } else {
+                other
+            };
+            match clean.parse::<f64>() {
+                Ok(num) if num.is_nan() || !num.is_finite() => {
+                    Err(ReplayError::Config(format!(
+                        "Invalid speed multiplier: '{val}' must be a finite real number or preset."
+                    )))
+                }
+                Ok(num) => {
+                    if num <= 0.0 {
+                        Ok(0.0) // unthrottled
+                    } else {
+                        Ok(num)
+                    }
+                }
+                Err(_) => Err(ReplayError::Config(format!(
+                    "Invalid speed multiplier or preset: '{val}'. Expected 1x, 10x, 50x, max, or positive number."
+                ))),
+            }
+        }
+    }
+}
+
 impl Default for ReplayConfig {
     fn default() -> Self {
         Self {
@@ -55,7 +96,7 @@ impl Default for ReplayConfig {
             sink: SinkType::Stdout {
                 topic: "events".to_string(),
             },
-            speed_multiplier: 1.0,
+            speed_multiplier: 10.0,
             rate: None,
             shift_timestamps: true,
             timestamp_column: "timestamp".to_string(),
@@ -215,11 +256,23 @@ impl ReplayConfig {
             _ => SinkType::Stdout { topic },
         };
 
+        let speed_multiplier = match profile.speed {
+            Some(SpeedSetting::Number(num)) => {
+                if num <= 0.0 {
+                    0.0
+                } else {
+                    num
+                }
+            }
+            Some(SpeedSetting::Preset(preset_str)) => parse_speed_preset(&preset_str)?,
+            None => 10.0,
+        };
+
         Ok(Self {
             input_file_path: PathBuf::from(profile.input_file_path),
             input_file_format: profile.input_file_format,
             sink,
-            speed_multiplier: profile.speed.unwrap_or(1.0),
+            speed_multiplier,
             rate: profile.rate,
             shift_timestamps: profile.shift_timestamps.unwrap_or(true),
             timestamp_column: profile

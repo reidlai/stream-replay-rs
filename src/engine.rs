@@ -15,6 +15,8 @@ pub struct ReplayStats {
     pub total_records: u64,
     pub elapsed: std::time::Duration,
     pub loops_completed: u64,
+    pub records_per_sec: f64,
+    pub partition_offsets: u64,
 }
 
 pub struct ReplayEngine {
@@ -69,7 +71,6 @@ impl ReplayEngine {
     }
 
     pub async fn run(&mut self) -> Result<ReplayStats, ReplayError> {
-        let start_instant = Instant::now();
         let mut total_records = 0u64;
 
         // Perform M2M authentication pre-flight
@@ -116,8 +117,15 @@ impl ReplayEngine {
         let mut first_instant: Option<Instant> = None;
 
         let max_records = self.config.burst;
+        let start_instant = Instant::now();
 
         loop {
+            if let Some(burst_limit) = max_records {
+                if total_records as usize >= burst_limit {
+                    break;
+                }
+            }
+
             while let Some(mut record) = self.reader.next_record()? {
                 // Monotonic time transformation
                 let emitted_time = self.time_engine.calculate_emitted_time(record.timestamp);
@@ -220,10 +228,22 @@ impl ReplayEngine {
             p.finish_with_message(format!("Completed: {total_records} records emitted"));
         }
 
+        let elapsed = start_instant.elapsed();
+        let secs = elapsed.as_secs_f64();
+        let records_per_sec = if secs > 0.000_001 {
+            total_records as f64 / secs
+        } else if total_records > 0 {
+            total_records as f64 / 0.000_001
+        } else {
+            0.0
+        };
+
         Ok(ReplayStats {
             total_records,
-            elapsed: start_instant.elapsed(),
+            elapsed,
             loops_completed: self.time_engine.loop_count,
+            records_per_sec,
+            partition_offsets: total_records,
         })
     }
 }

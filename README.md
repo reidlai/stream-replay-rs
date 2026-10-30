@@ -11,7 +11,7 @@
 
 ## 🏛️ Architecture & C4 Topology
 
-`stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **FerrousCX** streaming architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
+`stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **Ferrous Streaming** architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
 
 ```mermaid
 flowchart TD
@@ -36,7 +36,7 @@ flowchart TD
         StdoutSink["Terminal Stdout<br/><code>Inspection &amp; Diagnostics</code>"]
     end
 
-    subgraph Downstream Ecosystem ["🌊 FerrousCX Streaming Platform"]
+    subgraph Downstream Ecosystem ["🌊 Ferrous Streaming Platform"]
         IggyBroker["Apache Iggy Broker<br/><code>&lt;1ms fsync commit log</code>"]
         Arroyo["Arroyo 2PC Stream Engine<br/><code>Sub-second window aggregations</code>"]
         DeltaLake["Delta Lake ACID Storage<br/><code>orders_raw_events &amp; state</code>"]
@@ -87,11 +87,11 @@ flowchart TD
 
 ---
 
-## 🏁 Streaming Architecture Benchmark: FerrousCX vs. Kafka vs. NATS JetStream
+## 🏁 Streaming Architecture Benchmark: Ferrous Streaming vs. Kafka vs. NATS JetStream
 
-`stream-replay-rs` serves as the benchmarking and continuous traffic driver across the streaming ecosystem. Public performance benchmarks and architectural comparisons between **FerrousCX Streaming** (Apache Iggy broker + Arroyo 2PC stream engine + Delta Lake) and industry messaging standards:
+`stream-replay-rs` serves as the benchmarking and continuous traffic driver across the streaming ecosystem. Public performance benchmarks and architectural comparisons between **Ferrous Streaming** (Apache Iggy broker + Arroyo 2PC stream engine + Delta Lake) and industry messaging standards:
 
-| Benchmark Dimension | FerrousCX Streaming (Apache Iggy + Arroyo) | Apache Kafka (JVM / KRaft) | NATS JetStream (Go) |
+| Benchmark Dimension | Ferrous Streaming (Apache Iggy + Arroyo) | Apache Kafka (JVM / KRaft) | NATS JetStream (Go) |
 | :--- | :--- | :--- | :--- |
 | **Runtime & Language** | **Pure Rust** (100% memory-safe, zero GC) | Java / Scala (JVM Garbage Collection) | Go (Go Garbage Collector) |
 | **Write Path Fsync Durability** | **< 1.0 ms** p99 (`io_uring` direct disk commit) | **5.0 – 15.0 ms** p99 (OS page cache flush) | **2.0 – 6.0 ms** p99 (FileStorage synchronous write) |
@@ -144,7 +144,7 @@ docker compose -f docker-compose.dev.yml up -d
 
 ---
 
-### 3. Integrated FerrousCX Platform Quickstart
+### 3. Integrated Ferrous Streaming Platform Quickstart
 
 In the multi-submodule ecosystem, stream directly into the unified **Apache Iggy + Arroyo Stream Engine + Delta Lake** tier:
 

@@ -24,7 +24,7 @@ flowchart TD
         Reader["Arrow / Parquet / CSV Streaming Reader<br/>(&lt;35 MB RSS)"]
         TimeEngine["Monotonic Time Shift Engine<br/><code>Δt = t_now + (loop × Δ_dataset)</code>"]
         Salter["Entity ID Salter<br/><code>_L{n} Primary Key Salting</code>"]
-        RatePacer["Pacing &amp; Burst Controller<br/><code>10x Speed Default (~1 ord/min)</code>"]
+        RatePacer["Pacing &amp; Burst Controller<br/><code>10x Speed Default (~1 payload/min)</code>"]
         Auth["Kanidm M2M Authenticator<br/><code>svc_stream_replay</code>"]
     end
 
@@ -82,7 +82,7 @@ flowchart TD
    - Fixed event throughput injection via `--rate <N>` (events per second) for deterministic throughput benchmarking.
    - Paces inter-arrival delays with microsecond precision using Tokio asynchronous timers.
 6. **Interactive Micro-Burst Testing**:
-   - Supports `--burst <N>` to instantly inject batches (e.g. `--burst 500` orders) without pacing delays in under 1 second (>500 msgs/s), validating backpressure and buffer stability in Apache Iggy and Arroyo (FR-30).
+   - Supports `--burst <N>` to instantly inject batches (e.g. `--burst 500` payloads) without pacing delays in under 1 second (>500 msgs/s), validating backpressure and buffer stability in Apache Iggy and Arroyo (FR-30).
 7. **M2M Authentication**: Pre-flight Kanidm OAuth2 token exchange for `svc_stream_replay` (scopes: `stream:produce:intake`, `telemetry:write`) with offline fallback for disconnected development.
 
 ---

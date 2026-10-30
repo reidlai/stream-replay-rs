@@ -1,0 +1,20 @@
+services:
+  iggy-broker:
+    image: apache/iggy:latest
+    container_name: stream-replay-iggy-dev
+    restart: unless-stopped
+    command: ["--with-default-root-credentials"]
+    ports:
+      - "9092:9092"   # Kafka wire protocol gateway
+      - "3000:3000"   # HTTP management API & metrics
+      - "8090:8090"   # Native binary TCP protocol
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - IGGY_NODE_ADVERTISED_ADDRESS=localhost
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/iggy-server", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

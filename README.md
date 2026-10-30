@@ -14,6 +14,18 @@
 `stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **FerrousCX** streaming architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#2b2b2b',
+    'edgeLabelBackground': '#1e1e1e'
+  },
+  'flowchart': {
+    'subGraphTitleMargin': { 'top': 12, 'bottom': 24 },
+    'nodeSpacing': 45,
+    'rankSpacing': 55
+  }
+}}%%
 flowchart TD
     subgraph Data Sources ["📁 Historical Data Sources"]
         Parquet["Olist Orders Parquet<br/><code>data/olist_orders.parquet</code>"]
@@ -94,18 +106,61 @@ flowchart TD
 cargo build --release
 ```
 
-### 2. Stream Flagship Olist Dataset to Apache Iggy (Kafka Gateway)
+### 2. Standalone Quickstart (Isolated Development)
+
+#### Option A: Terminal Stdout Inspection (Zero-Dependency)
+Inspect formatted replay events and monotonic time-shifting immediately in your terminal:
 ```bash
-# Streams 100k Brazilian e-commerce orders into Iggy on port 9092 at 10x speed (~1 order/min)
+./target/release/stream-replay-rs \
+  --input-file-path data/olist_orders.parquet \
+  --sink stdout \
+  --speed 10x \
+  --progress
+```
+
+#### Option B: Minimal Standalone Broker (`docker-compose.dev.yml`)
+Start an isolated Apache Iggy message broker locally on port 9092 in seconds:
+```bash
+# 1. Start lightweight dev broker
+docker compose -f docker-compose.dev.yml up -d
+
+# 2. Stream historical events to localhost:9092
 ./target/release/stream-replay-rs \
   --input-file-path data/olist_orders.parquet \
   --sink kafka \
   --sink-url localhost:9092 \
   --topic orders/intake \
-  --speed 10x
+  --speed 10x \
+  --progress
 ```
 
-### 3. Run Micro-Burst Stress Test
+---
+
+### 3. Integrated FerrousCX Platform Quickstart
+
+In the multi-submodule ecosystem, stream directly into the unified **Apache Iggy + Arroyo Stream Engine + Delta Lake** tier:
+
+```bash
+# 1. From workspace root, start the streaming platform tier
+docker compose -f ../ferrous-streaming/docker-compose.yml up -d
+
+# 2. Launch the replayer targeting the intake stream
+./target/release/stream-replay-rs \
+  --input-file-path data/olist_orders.parquet \
+  --sink kafka \
+  --sink-url localhost:9092 \
+  --topic orders/intake \
+  --speed 10x \
+  --progress
+
+# 3. Monitor live pipeline telemetry & tumbling micro-batches:
+#    Arroyo Web Console: http://localhost:5115/pipelines
+#    Iggy Management:   http://localhost:3000
+```
+
+---
+
+### 4. Interactive Micro-Burst Stress Testing
 ```bash
 # Injects 500 events instantaneously (<1s, >500 msgs/s) to evaluate backpressure
 ./target/release/stream-replay-rs \
@@ -116,7 +171,9 @@ cargo build --release
   --burst 500
 ```
 
-### 4. Continuous Looping Simulation with Entity Salting
+---
+
+### 5. Continuous Looping Simulation with Entity Salting
 ```bash
 # Loops the dataset continuously with monotonic time advancement and ID salting (_L1, _L2)
 ./target/release/stream-replay-rs \

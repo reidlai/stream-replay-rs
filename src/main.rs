@@ -82,6 +82,22 @@ pub struct CliArgs {
     /// Micro-burst testing: inject N events immediately
     #[arg(long)]
     pub burst: Option<usize>,
+
+    /// Kanidm authentication service URL
+    #[arg(long)]
+    pub auth_url: Option<String>,
+
+    /// Kanidm M2M service account ID [default: svc_stream_replay]
+    #[arg(long)]
+    pub svc_account: Option<String>,
+
+    /// Kanidm M2M service account client secret
+    #[arg(long)]
+    pub svc_secret: Option<String>,
+
+    /// Kanidm M2M pre-issued bearer token
+    #[arg(long)]
+    pub svc_token: Option<String>,
 }
 
 #[tokio::main]
@@ -121,6 +137,18 @@ async fn main() {
                 if args.burst.is_some() {
                     cfg.burst = args.burst;
                 }
+                if let Some(u) = args.auth_url {
+                    cfg.auth_url = Some(u);
+                }
+                if let Some(a) = args.svc_account {
+                    cfg.service_account = Some(a);
+                }
+                if let Some(s) = args.svc_secret {
+                    cfg.service_secret = Some(s);
+                }
+                if let Some(t) = args.svc_token {
+                    cfg.auth_token = Some(t);
+                }
                 cfg
             }
             Err(e) => {
@@ -156,6 +184,30 @@ async fn main() {
             _ => SinkType::Stdout { topic: args.topic },
         };
 
+        let mut timestamp_col = args.timestamp_column;
+        let mut key_col = args.key_column;
+
+        // Auto-detect Olist schema conventions if not explicitly provided
+        if file_path.to_string_lossy().contains("olist") {
+            if timestamp_col == "timestamp" {
+                timestamp_col = "order_purchase_timestamp".to_string();
+            }
+            if key_col.is_none() {
+                key_col = Some("order_id".to_string());
+            }
+        }
+
+        // Auto-generate sample olist dataset if missing
+        if !file_path.exists()
+            && file_path.to_string_lossy().contains("olist")
+            && file_path.extension().is_none_or(|ext| ext == "parquet")
+        {
+            info!("Target Olist dataset {:?} does not exist. Auto-generating 1,000 orders...", file_path);
+            if let Err(e) = stream_replay_rs::data_generator::generate_olist_orders_parquet(&file_path, 1000) {
+                error!("Failed to generate sample Olist dataset: {e}");
+            }
+        }
+
         ReplayConfig {
             input_file_path: file_path,
             input_file_format: args.input_file_format,
@@ -163,13 +215,17 @@ async fn main() {
             speed_multiplier: args.speed,
             rate: args.rate,
             shift_timestamps: args.shift_timestamps,
-            timestamp_column: args.timestamp_column,
-            key_column: args.key_column,
+            timestamp_column: timestamp_col,
+            key_column: key_col,
             loop_playback: args.r#loop,
             advance_loop_timestamps: args.advance_loop_timestamps,
             loop_id_salt: args.loop_id_salt,
             progress: args.progress,
             burst: args.burst,
+            auth_url: args.auth_url,
+            service_account: args.svc_account,
+            service_secret: args.svc_secret,
+            auth_token: args.svc_token,
         }
     };
 

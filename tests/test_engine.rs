@@ -98,6 +98,10 @@ speed = 5.0
 loop_playback = true
 advance_loop_timestamps = true
 loop_id_salt = true
+auth_url = "https://localhost:8443"
+service_account = "svc_stream_replay"
+service_secret = "m2m_secret_val"
+auth_token = "m2m_token_val"
 "#
     )
     .unwrap();
@@ -109,6 +113,10 @@ loop_id_salt = true
     assert!(config.loop_playback);
     assert!(config.advance_loop_timestamps);
     assert!(config.loop_id_salt);
+    assert_eq!(config.auth_url.as_deref(), Some("https://localhost:8443"));
+    assert_eq!(config.service_account.as_deref(), Some("svc_stream_replay"));
+    assert_eq!(config.service_secret.as_deref(), Some("m2m_secret_val"));
+    assert_eq!(config.auth_token.as_deref(), Some("m2m_token_val"));
 }
 
 #[tokio::test]

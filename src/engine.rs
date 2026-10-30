@@ -1,3 +1,4 @@
+use crate::auth::M2MAuthenticator;
 use crate::config::ReplayConfig;
 use crate::error::ReplayError;
 use crate::reader::{create_reader, RecordReader};
@@ -21,6 +22,7 @@ pub struct ReplayEngine {
     sink: Box<dyn Sink>,
     reader: Box<dyn RecordReader>,
     time_engine: TimeShiftEngine,
+    authenticator: M2MAuthenticator,
     custom_sink: Option<Arc<dyn Sink>>,
 }
 
@@ -40,11 +42,19 @@ impl ReplayEngine {
             config.loop_id_salt,
         );
 
+        let authenticator = M2MAuthenticator::new(
+            config.auth_url.clone(),
+            config.service_account.clone(),
+            config.service_secret.clone(),
+            config.auth_token.clone(),
+        );
+
         Ok(Self {
             config,
             sink,
             reader,
             time_engine,
+            authenticator,
             custom_sink: None,
         })
     }
@@ -54,9 +64,20 @@ impl ReplayEngine {
         self
     }
 
+    pub fn authenticator(&self) -> &M2MAuthenticator {
+        &self.authenticator
+    }
+
     pub async fn run(&mut self) -> Result<ReplayStats, ReplayError> {
         let start_instant = Instant::now();
         let mut total_records = 0u64;
+
+        // Perform M2M authentication pre-flight
+        let _token = self.authenticator.authenticate().await?;
+        info!(
+            "M2M Authentication active for service account '{}'",
+            self.authenticator.service_account
+        );
 
         // Extract dataset bounds
         match self.reader.get_bounds() {

@@ -20,6 +20,10 @@ pub struct ProfileConfig {
     pub loop_playback: Option<bool>,
     pub advance_loop_timestamps: Option<bool>,
     pub loop_id_salt: Option<bool>,
+    pub auth_url: Option<String>,
+    pub service_account: Option<String>,
+    pub service_secret: Option<String>,
+    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +41,10 @@ pub struct ReplayConfig {
     pub loop_id_salt: bool,
     pub progress: bool,
     pub burst: Option<usize>,
+    pub auth_url: Option<String>,
+    pub service_account: Option<String>,
+    pub service_secret: Option<String>,
+    pub auth_token: Option<String>,
 }
 
 impl Default for ReplayConfig {
@@ -57,6 +65,10 @@ impl Default for ReplayConfig {
             loop_id_salt: false,
             progress: true,
             burst: None,
+            auth_url: None,
+            service_account: None,
+            service_secret: None,
+            auth_token: None,
         }
     }
 }
@@ -137,6 +149,20 @@ impl ReplayConfigBuilder {
         self
     }
 
+    pub fn auth(
+        mut self,
+        url: Option<String>,
+        account: Option<String>,
+        secret: Option<String>,
+        token: Option<String>,
+    ) -> Self {
+        self.config.auth_url = url;
+        self.config.service_account = account;
+        self.config.service_secret = secret;
+        self.config.auth_token = token;
+        self
+    }
+
     pub fn build(self) -> Result<ReplayConfig, ReplayError> {
         if self.config.input_file_path.as_os_str().is_empty() {
             return Err(ReplayError::Config(
@@ -205,6 +231,10 @@ impl ReplayConfig {
             loop_id_salt: profile.loop_id_salt.unwrap_or(false),
             progress: true,
             burst: None,
+            auth_url: profile.auth_url,
+            service_account: profile.service_account,
+            service_secret: profile.service_secret,
+            auth_token: profile.auth_token,
         })
     }
 }

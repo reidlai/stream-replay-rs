@@ -14,18 +14,6 @@
 `stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **FerrousCX** streaming architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#2b2b2b',
-    'edgeLabelBackground': '#1e1e1e'
-  },
-  'flowchart': {
-    'subGraphTitleMargin': { 'top': 12, 'bottom': 24 },
-    'nodeSpacing': 45,
-    'rankSpacing': 55
-  }
-}}%%
 flowchart TD
     subgraph Data Sources ["📁 Historical Data Sources"]
         Parquet["Olist Orders Parquet<br/><code>data/olist_orders.parquet</code>"]

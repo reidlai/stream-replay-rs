@@ -19,11 +19,11 @@ pub struct CliArgs {
     #[arg(short, long)]
     pub config: Option<PathBuf>,
 
-    /// Path to CSV or Parquet dataset file
+    /// Path to CSV, Parquet, or JSONL dataset file
     #[arg(short, long)]
     pub input_file_path: Option<PathBuf>,
 
-    /// File format: 'csv' or 'parquet' [default: auto-detect from extension]
+    /// File format: 'csv', 'parquet', or 'jsonl' [default: auto-detect from extension]
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 

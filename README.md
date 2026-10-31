@@ -11,17 +11,18 @@
 
 ## 🏛️ Architecture & C4 Topology
 
-`stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **Ferrous Streaming** architecture. It reads static historical datasets (Apache Parquet and CSV), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
+`stream-replay-rs` is a high-performance, single-responsibility traffic simulator designed for the **Ferrous Streaming** architecture. It reads static historical datasets (Apache Parquet, CSV, and JSONL), transforms timestamps dynamically to anchor to the live replay clock, and dispatches events into pluggable message brokers and shared-memory IPC sinks.
 
 ```mermaid
 flowchart TD
     subgraph Data Sources ["📁 Historical Data Sources"]
-        Parquet["Olist Orders Parquet<br/><code>data/olist_orders.parquet</code>"]
-        CSV["CSV Event Log<br/><code>events.csv</code>"]
+        OlistParquet["Olist Orders Parquet<br/><code>data/olist_orders.parquet</code>"]
+        GenericCSV["Generic CSV Stream Log<br/><code>telemetry.csv</code>"]
+        GenericJSONL["Line-Delimited JSONL<br/><code>events.jsonl</code>"]
     end
 
     subgraph Core Engine ["⚙️ stream-replay-rs Engine"]
-        Reader["Arrow / Parquet / CSV Streaming Reader<br/>(&lt;35 MB RSS)"]
+        Reader["Arrow / Parquet / CSV / JSONL Streaming Reader<br/>(&lt;35 MB RSS)"]
         TimeEngine["Monotonic Time Shift Engine<br/><code>Δt = t_now + (loop × Δ_dataset)</code>"]
         Salter["Entity ID Salter<br/><code>_L{n} Primary Key Salting</code>"]
         RatePacer["Pacing &amp; Burst Controller<br/><code>10x Speed Default (~1 payload/min)</code>"]
@@ -29,7 +30,7 @@ flowchart TD
     end
 
     subgraph Pluggable Sinks ["📡 Pluggable Multi-Sink Architecture"]
-        KafkaSink["Apache Iggy / Kafka Gateway<br/><code>orders/intake (port 9092)</code>"]
+        KafkaSink["Apache Iggy / Kafka Gateway<br/><code>orders/intake or events (port 9092)</code>"]
         NATSSink["NATS JetStream<br/><code>events (port 4222)</code>"]
         FluvioSink["Fluvio Broker<br/><code>events (port 9003)</code>"]
         IceoryxSink["Eclipse iceoryx2<br/><code>Zero-Copy Shared Memory IPC</code>"]
@@ -39,11 +40,12 @@ flowchart TD
     subgraph Downstream Ecosystem ["🌊 Ferrous Streaming Platform"]
         IggyBroker["Apache Iggy Broker<br/><code>&lt;1ms fsync commit log</code>"]
         Arroyo["Arroyo 2PC Stream Engine<br/><code>Sub-second window aggregations</code>"]
-        DeltaLake["Delta Lake ACID Storage<br/><code>orders_raw_events &amp; state</code>"]
+        DeltaLake["Delta Lake ACID Storage<br/><code>raw_events &amp; state</code>"]
     end
 
-    Parquet --> Reader
-    CSV --> Reader
+    OlistParquet --> Reader
+    GenericCSV --> Reader
+    GenericJSONL --> Reader
     Reader --> TimeEngine
     TimeEngine --> Salter
     Salter --> RatePacer
@@ -73,7 +75,7 @@ flowchart TD
 ## ⚡ Key Features
 
 1. **Pure-Rust & Native Binary**: Zero Python or JVM dependencies. Compiles to an optimized standalone binary and an embeddable async Rust library.
-2. **Streaming Reader (<35 MB RSS)**: Bounded memory footprint leveraging Apache Arrow vector record batches and chunked CSV iterators (NFR-9).
+2. **Streaming Reader (<35 MB RSS)**: Bounded memory footprint leveraging Apache Arrow vector record batches, chunked CSV iterators, and line-delimited JSONL streaming (NFR-9).
 3. **Monotonic Timestamp Advancement**: Mathematically shifts historical event timestamps forward to the live wall-clock time. Looping iterations continuously advance time without negative deltas or backward jitter:
    $$\text{Timestamp}_{\text{emitted}} = \text{Timestamp}_{\text{record}} + \Delta_{\text{now}} + (\text{loop\_count} \times \Delta_{\text{dataset}})$$
 4. **Loop Entity ID Salting**: Appends loop iteration markers (`_L1`, `_L2`) to entity primary keys (e.g. `order_id`) across infinite loops, preventing primary key deduplication collisions in downstream Delta Lake sinks.
@@ -87,26 +89,46 @@ flowchart TD
 
 ---
 
-## 🏁 Streaming Architecture Benchmark: Ferrous Streaming vs. Kafka vs. NATS JetStream
+## 🏁 Streaming Benchmark: Ferrous Streaming (Iggy + Arroyo) vs. Kafka vs. NATS JetStream vs. Fluvio
 
-`stream-replay-rs` serves as the benchmarking and continuous traffic driver across the streaming ecosystem. Public performance benchmarks and architectural comparisons between **Ferrous Streaming** (Apache Iggy broker + Arroyo 2PC stream engine + Delta Lake) and industry messaging standards:
+`stream-replay-rs` is the load driver for comparing **Ferrous Streaming** (Apache Iggy broker + Arroyo stream engine + Delta Lake) with **Apache Kafka**, **NATS JetStream** and **Fluvio**. Apache Iggy and Arroyo are a broker plus a stream engine, while the others are brokers only, so the comparison has two layers.
 
-| Benchmark Dimension | Ferrous Streaming (Apache Iggy + Arroyo) | Apache Kafka (JVM / KRaft) | NATS JetStream (Go) |
+### Layer 1: Broker Architecture (broker only)
+
+| Dimension | Apache Iggy | Apache Kafka | NATS JetStream | Fluvio |
+| :--- | :--- | :--- | :--- | :--- |
+| **Language / Runtime** | Rust (no GC) | Java / Scala (JVM, GC) | Go (GC) | Rust (no GC) |
+| **I/O Model** | Thread-per-core, shared-nothing, `io_uring` | Multi-threaded, OS page cache, `sendfile` | Go runtime, file or memory storage | Async Rust (SPU) |
+| **Deployment Footprint** | Single native binary | JVM + KRaft controllers | Single native binary | Cluster of SC + SPU processes |
+| **Tail-Latency Sources** | No GC pauses | JVM GC, producer batching (`linger.ms`) | Go GC | No GC pauses |
+| **Inline Processing** | None (use a stream engine) | Kafka Streams / external engines | Consumers only | SmartModules (WASM) |
+| **`stream-replay-rs` Sink** | `--sink kafka` (Kafka-compatible gateway) | `--sink kafka` | `--sink nats` | `--sink fluvio` |
+
+### Layer 2: End-to-End Ingest to Lakehouse
+
+| Pipeline | Broker | Processing | Storage |
 | :--- | :--- | :--- | :--- |
-| **Runtime & Language** | **Pure Rust** (100% memory-safe, zero GC) | Java / Scala (JVM Garbage Collection) | Go (Go Garbage Collector) |
-| **Write Path Fsync Durability** | **< 1.0 ms** p99 (`io_uring` direct disk commit) | **5.0 – 15.0 ms** p99 (OS page cache flush) | **2.0 – 6.0 ms** p99 (FileStorage synchronous write) |
-| **Ingestion Throughput (per core)** | **30,000 – 50,000+ msgs/sec** | 15,000 – 25,000 msgs/sec | 20,000 – 35,000 msgs/sec |
-| **Broker Memory Footprint (RSS)** | **15 – 35 MB** (minimal rootless container) | **1.0 – 2.5 GB** (JVM heap + page cache) | **35 – 80 MB** (Go runtime memory) |
-| **Data Transfer Architecture** | Linux kernel zero-copy (`io_uring` & `splice`) | Linux OS page cache sendfile | Go user-space buffer copy |
-| **Shared Memory IPC (Ultra-Low Latency)**| **Eclipse iceoryx2** (<500ns latency) | Not Supported (TCP / loopback only) | Not Supported (TCP / loopback only) |
-| **End-to-End Lakehouse Storage Sync** | Native **Arroyo 2PC Micro-Batching** &rarr; Delta Lake | Kafka Connect / Spark / Flink &rarr; Parquet | Custom application consumers / writers |
-| **Ecosystem Scenario Suitability** | High-throughput financial/CX event streaming | Distributed enterprise event backbone | Cloud-native microservice pub/sub |
+| **Ferrous Streaming** | Apache Iggy | Arroyo (SQL, 2PC checkpoints) | Delta Lake |
+| **Kafka stack** | Apache Kafka | Flink / Spark Structured Streaming / Kafka Connect | Parquet / Delta / Iceberg |
+| **NATS stack** | NATS JetStream | Custom consumers | Custom Parquet writer |
+| **Fluvio stack** | Fluvio | SmartModules + sink connectors | Custom Delta / Parquet writer |
 
-> [!NOTE]
-> Benchmarks measured using `stream-replay-rs` event injection driving sustained batch sizes of 100k events with payload sizes of 256B–1KB on standard AMD64 workstations. Apache Iggy demonstrates up to **3x higher per-core throughput** and **98% lower memory consumption** compared to traditional JVM-based message brokers under immediate fsync durability constraints.
+### Published Benchmark Figures
+
+Figures below are **as published by each project or vendor** (retrieved 2026-10-31). They come from different hardware, payload sizes, replication and durability settings, so they are **not a head-to-head comparison**. Read each row with its conditions, and follow the source before quoting a number.
+
+| System | Published figure | Published by / conditions | Confidence |
+| :--- | :--- | :--- | :--- |
+| **Apache Iggy** | Peak ~**2.0 GB/s** (~3.36M msgs/s), p99 ~**0.495 ms** at peak | Apache Iggy project benchmarks (`iggy-bench`); AWS `i4i` instances, Intel Xeon, 16 consumers, 1000 B messages, 250 msgs/batch. Source: [benchmarks.iggy.apache.org](https://benchmarks.iggy.apache.org) | Primary, project-published; tuned for peak throughput |
+| **Apache Kafka** | Peak **605 MB/s**; p99 end-to-end ~**5 ms** at 200 MB/s | Confluent, Aug 2020, Kafka vs Pulsar vs RabbitMQ on a standard cloud testbed. Source: [Confluent benchmark blog](https://www.confluent.io/blog/kafka-fastest-messaging-system/) | Primary, vendor-published; 2020 results |
+| **NATS JetStream** | ~**50K to 400K+** msgs/s with file storage; ~**1 to 5 ms** with persistence | No single authoritative benchmark found; ranges come from secondary write-ups and depend on payload, disk, sync interval and replicas. Reference: [NATS docs](https://docs.nats.io) and `nats bench` | **Low**: secondary sources only |
+| **Fluvio** | InfinyOn reports **~20x to 38x lower p99 latency** and **~1.5x higher throughput** than Kafka; **~50 MB** idle RAM vs **~1 GB** for Kafka | InfinyOn (Fluvio's maintainers) comparison with Kafka at default settings (replication factor 1), later discussed critically by the community. Source: [InfinyOn blog](https://www.infinyon.com/blog/) | Vendor claim, reported via secondary sources; defaults and RF=1 |
+| **Arroyo** (processing layer) | Arroyo reports large gains over Flink on **sliding windows** (up to ~10x); similar to Flink on simple filters and tumbling windows | Arroyo project engineering blog. Source: [arroyo.dev blog](https://www.arroyo.dev/blog/) | Vendor claim; workload-specific |
+
+> [!WARNING]
+> Not directly comparable: Iggy's figure is peak throughput with many consumers, Kafka's is a 2020 mid-size cloud setup, NATS's is a range, and Fluvio's is a relative claim against Kafka. No source above benchmarks Iggy, Kafka, NATS JetStream and Fluvio together on the same hardware. A single independent head-to-head would be needed to rank them, and none of the published figures involve `stream-replay-rs`.
 
 ---
-
 ## 🚀 Quickstart
 
 ### 1. Build Native Binary
@@ -248,8 +270,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--config <PATH>` | `-c` | `None` | Path to profile TOML configuration file |
-| `--input-file-path <PATH>` | `-i` | `None` | Path to CSV or Parquet dataset file |
-| `--input-file-format <FMT>` | `-f` | Auto | File format (`csv` or `parquet`) |
+| `--input-file-path <PATH>` | `-i` | `None` | Path to Parquet, CSV, or JSONL dataset file |
+| `--input-file-format <FMT>` | `-f` | Auto | File format (`parquet`, `csv`, or `jsonl`) |
 | `--sink <SINK>` | `-s` | `stdout` | Target sink: `kafka`, `nats`, `fluvio`, `iceoryx2`, `stdout` |
 | `--sink-url <URL>` | `-u` | `localhost:9092`| Broker connection URL |
 | `--topic <TOPIC>` | `-t` | `events` | Target topic or channel name |

@@ -6,6 +6,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::{Map, Value};
 use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -144,6 +145,142 @@ impl RecordReader for CsvRecordReader {
         self.reset()?;
         let first = self.next_record()?.ok_or_else(|| {
             ReplayError::Dataset("Cannot compute bounds on empty CSV dataset".to_string())
+        })?;
+        let mut t_min = first.timestamp;
+        let mut t_max = first.timestamp;
+
+        while let Some(rec) = self.next_record()? {
+            t_min = t_min.min(rec.timestamp);
+            t_max = t_max.max(rec.timestamp);
+        }
+
+        self.reset()?;
+        Ok((t_min, t_max))
+    }
+}
+
+pub struct JsonlRecordReader {
+    path: PathBuf,
+    timestamp_col: String,
+    key_col: Option<String>,
+    lines: std::io::Lines<BufReader<File>>,
+    line_number: usize,
+}
+
+impl JsonlRecordReader {
+    pub fn new(
+        path: &Path,
+        timestamp_col: &str,
+        key_col: Option<&str>,
+    ) -> Result<Self, ReplayError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let lines = reader.lines();
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            timestamp_col: timestamp_col.to_string(),
+            key_col: key_col.map(|s| s.to_string()),
+            lines,
+            line_number: 0,
+        })
+    }
+}
+
+impl RecordReader for JsonlRecordReader {
+    fn next_record(&mut self) -> Result<Option<ReplayRecord>, ReplayError> {
+        for line_res in self.lines.by_ref() {
+            self.line_number += 1;
+            let line = line_res?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let value: Value = serde_json::from_str(trimmed).map_err(|e| {
+                ReplayError::Dataset(format!(
+                    "Invalid JSON at line {} in {:?}: {}",
+                    self.line_number, self.path, e
+                ))
+            })?;
+
+            let obj = match value {
+                Value::Object(map) => map,
+                _ => {
+                    return Err(ReplayError::Dataset(format!(
+                        "Expected JSON object at line {} in {:?}, got non-object value",
+                        self.line_number, self.path
+                    )));
+                }
+            };
+
+            let raw_ts_val = obj.get(&self.timestamp_col).ok_or_else(|| {
+                ReplayError::Dataset(format!(
+                    "Timestamp field '{}' not found in JSON object at line {} in {:?}",
+                    self.timestamp_col, self.line_number, self.path
+                ))
+            })?;
+
+            let timestamp = match raw_ts_val {
+                Value::String(s) => parse_timestamp(s)?,
+                Value::Number(n) => parse_timestamp(&n.to_string())?,
+                _ => {
+                    return Err(ReplayError::Dataset(format!(
+                        "Timestamp field '{}' must be string or number at line {} in {:?}",
+                        self.timestamp_col, self.line_number, self.path
+                    )));
+                }
+            };
+
+            let mut key = None;
+            let mut key_source_column = None;
+
+            if let Some(ref k_col) = self.key_col {
+                if let Some(k_val) = obj.get(k_col) {
+                    key = match k_val {
+                        Value::String(s) => Some(s.clone()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => Some(k_val.to_string()),
+                    };
+                    key_source_column = Some(k_col.clone());
+                }
+            } else {
+                for (k, v) in &obj {
+                    if k.contains("id") || k.contains("key") {
+                        key = match v {
+                            Value::String(s) => Some(s.clone()),
+                            Value::Number(n) => Some(n.to_string()),
+                            _ => Some(v.to_string()),
+                        };
+                        key_source_column = Some(k.clone());
+                        break;
+                    }
+                }
+            }
+
+            return Ok(Some(ReplayRecord {
+                key,
+                key_source_column,
+                timestamp,
+                payload: Value::Object(obj),
+            }));
+        }
+
+        Ok(None)
+    }
+
+    fn reset(&mut self) -> Result<(), ReplayError> {
+        let file = File::open(&self.path)?;
+        let reader = BufReader::new(file);
+        self.lines = reader.lines();
+        self.line_number = 0;
+        Ok(())
+    }
+
+    fn get_bounds(&mut self) -> Result<(DateTime<Utc>, DateTime<Utc>), ReplayError> {
+        self.reset()?;
+        let first = self.next_record()?.ok_or_else(|| {
+            ReplayError::Dataset("Cannot compute bounds on empty JSONL dataset".to_string())
         })?;
         let mut t_min = first.timestamp;
         let mut t_max = first.timestamp;
@@ -424,14 +561,24 @@ pub fn create_reader(
         Some(f) => f.to_lowercase(),
         None => {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                ext.to_lowercase()
+                match ext.to_lowercase().as_str() {
+                    "jsonl" | "ndjson" | "jsonlines" => "jsonl".to_string(),
+                    "parquet" | "pq" => "parquet".to_string(),
+                    "csv" => "csv".to_string(),
+                    other => other.to_string(),
+                }
             } else {
-                // Inspect first 4 bytes for Parquet magic header PAR1
+                // Inspect first 4 bytes for Parquet magic header PAR1 or JSON '{'
                 let mut header = [0u8; 4];
                 if let Ok(mut f) = File::open(path) {
-                    use std::io::Read;
-                    if f.read_exact(&mut header).is_ok() && &header == b"PAR1" {
-                        "parquet".to_string()
+                    if f.read_exact(&mut header).is_ok() {
+                        if &header == b"PAR1" {
+                            "parquet".to_string()
+                        } else if header[0] == b'{' {
+                            "jsonl".to_string()
+                        } else {
+                            "csv".to_string()
+                        }
                     } else {
                         "csv".to_string()
                     }
@@ -453,8 +600,13 @@ pub fn create_reader(
             timestamp_col,
             key_col,
         )?)),
+        "jsonl" | "ndjson" | "jsonlines" => Ok(Box::new(JsonlRecordReader::new(
+            path,
+            timestamp_col,
+            key_col,
+        )?)),
         other => Err(ReplayError::Config(format!(
-            "Unsupported dataset format: '{}'. Expected 'csv' or 'parquet'",
+            "Unsupported dataset format: '{}'. Expected 'csv', 'parquet', or 'jsonl'",
             other
         ))),
     }

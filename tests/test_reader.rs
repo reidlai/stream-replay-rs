@@ -5,7 +5,9 @@ use parquet::arrow::ArrowWriter;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use stream_replay_rs::reader::{create_reader, CsvRecordReader, ParquetRecordReader, RecordReader};
+use stream_replay_rs::reader::{
+    create_reader, CsvRecordReader, JsonlRecordReader, ParquetRecordReader, RecordReader,
+};
 use tempfile::NamedTempFile;
 
 #[test]
@@ -145,4 +147,86 @@ fn test_parquet_reader_native_timestamp_and_nulls() {
     let (t0, t_last) = reader.get_bounds().unwrap();
     assert_eq!(r1.timestamp, t0);
     assert_eq!(r2.timestamp, t_last);
+}
+
+#[test]
+fn test_jsonl_reader_streaming() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(
+        tmp,
+        r#"{{"event_id": "evt_1", "timestamp": "2026-10-30T10:00:00Z", "metric": 42.5}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"event_id": "evt_2", "timestamp": "2026-10-30T10:01:00Z", "metric": 88.0}}"#
+    )
+    .unwrap();
+    writeln!(
+        tmp,
+        r#"{{"event_id": "evt_3", "timestamp": "2026-10-30T10:05:00Z", "metric": 105.2}}"#
+    )
+    .unwrap();
+    tmp.flush().unwrap();
+
+    let mut reader = JsonlRecordReader::new(tmp.path(), "timestamp", Some("event_id")).unwrap();
+
+    let r1 = reader.next_record().unwrap().expect("record 1");
+    assert_eq!(r1.key.as_deref(), Some("evt_1"));
+    assert_eq!(r1.payload["metric"], 42.5);
+
+    let r2 = reader.next_record().unwrap().expect("record 2");
+    assert_eq!(r2.key.as_deref(), Some("evt_2"));
+    assert_eq!(r2.payload["metric"], 88.0);
+
+    let r3 = reader.next_record().unwrap().expect("record 3");
+    assert_eq!(r3.key.as_deref(), Some("evt_3"));
+
+    assert!(reader.next_record().unwrap().is_none());
+
+    // Bounds check
+    let (t0, t_last) = reader.get_bounds().unwrap();
+    assert_eq!(r1.timestamp, t0);
+    assert_eq!(r3.timestamp, t_last);
+}
+
+#[test]
+fn test_jsonl_reader_numeric_timestamps_and_auto_detect() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("events.jsonl");
+    {
+        let mut f = File::create(&file_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"job_id": 1001, "ts": 1700000000, "status": "running"}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"job_id": 1002, "ts": 1700000060, "status": "completed"}}"#
+        )
+        .unwrap();
+        f.flush().unwrap();
+    }
+
+    let mut reader = create_reader(&file_path, None, "ts", None).unwrap();
+    let r1 = reader.next_record().unwrap().expect("record 1");
+    assert_eq!(r1.key.as_deref(), Some("1001"));
+    assert_eq!(r1.payload["status"], "running");
+
+    let r2 = reader.next_record().unwrap().expect("record 2");
+    assert_eq!(r2.key.as_deref(), Some("1002"));
+    assert_eq!(r2.payload["status"], "completed");
+
+    assert!(reader.next_record().unwrap().is_none());
+}
+
+#[test]
+fn test_jsonl_reader_missing_timestamp() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, r#"{{"id": "abc", "value": 123}}"#).unwrap();
+    tmp.flush().unwrap();
+
+    let mut reader = JsonlRecordReader::new(tmp.path(), "missing_timestamp", None).unwrap();
+    assert!(reader.next_record().is_err());
 }

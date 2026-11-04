@@ -73,7 +73,7 @@ cargo install --git https://github.com/reidlai/stream-replay-rs
 1. **Pure Rust, native binary**: no Python or JVM dependencies. One optimized binary and an embeddable async library.
 2. **Streaming reader (<35 MB RSS)**: bounded memory using Apache Arrow record batches, chunked CSV iterators and line-delimited JSONL streaming.
 3. **Dataset-agnostic**: CSV, Parquet and JSONL in; a column mapping tells it which column paces the replay and which column is the entity key.
-4. **Timestamp rebasing**: historical timestamps in any supported unit or format are rebased onto the live clock (see [Timestamp rebasing and speed](#-timestamp-rebasing-and-speed)). Looping never moves time backward.
+4. **Timestamp rebasing**: historical timestamps in any supported unit or format are rebased onto the live clock (see [Timestamp rebasing and speed](#-timestamp-rebasing-and-speed)). With `--advance-loop-timestamps`, looping never moves time backward.
 5. **Speed or fixed rate**: `--speed <n>` rolls the dataset forward `n` times faster than its original spacing; `--rate <n>` emits a fixed number of events per second. The two are mutually exclusive.
 6. **Loop entity ID salting**: appends `_L1`, `_L2`, … to entity keys across loops so downstream stores do not see primary-key collisions.
 7. **Pluggable sinks**: Kafka protocol, NATS JetStream and Fluvio, selected with `--sink`. `stdout` and `iceoryx2` are also available.
@@ -94,7 +94,7 @@ A dataset's timestamps rarely resemble the present: they may be years old, in se
 
    where `s` is the speed (`--speed`) and `Δ_dataset` is the dataset span (last pacing timestamp minus first). At `s = 1` the original inter-arrival spacing is preserved; at `s = 10` the dataset rolls forward ten times faster.
 5. With `--shift-timestamps` (the default), the pacing column in the payload is rewritten to the emitted time, and every column listed with `--shift-column` is shifted by the same offset, so durations between a record's own timestamps stay consistent.
-6. On each loop (`--loop`) the offset grows by `Δ_dataset`, so the emitted time never goes backward, and `--loop-id-salt` appends `_L{n}` to the entity key.
+6. On each loop (`--loop`) pacing continues past the end of the dataset: the schedule offset grows by `Δ_dataset`. With `--advance-loop-timestamps` the payload timestamps advance by the same amount, so the emitted time never goes backward (a strictly increasing 1 ns nudge is applied where a pass starts exactly at the previous pass's last time). `--loop-id-salt` appends `_L{n}` to the entity key.
 
 ### Worked example
 
@@ -113,9 +113,11 @@ The replay starts at `T_start = 2026-11-04 10:00:00`.
 | `--speed 1` | 10:00:00 | 10:00:30 | 10:02:00 | the emitted time |
 | `--speed 10` | 10:00:00 | 10:00:03 | 10:00:12 | the emitted time |
 
-With `--loop`, the second pass adds `Δ_dataset = 120 s` (divided by the speed) to every offset, so at `--speed 10` record 1 of the second pass is emitted at 10:00:12, record 2 at 10:00:15, and so on.
+With `--loop --advance-loop-timestamps`, the second pass adds `Δ_dataset = 120 s` (divided by the speed) to every offset, so at `--speed 10` record 1 of the second pass is emitted at 10:00:12, record 2 at 10:00:15, and so on.
 
 `--event-time preserve` keeps the original spacing in the payload timestamps even when `--speed` is not 1, while pacing still follows the speed. The default, `compress`, makes event time follow the same compressed schedule as wall-clock time, so stream-processor watermarks advance in real time.
+
+Two cases have no dataset schedule to divide, so under `compress` the payload timestamp is simply the wall-clock time at emission: `--speed max` (no pacing) and `--rate` (fixed events per second). Integer epoch timestamps are written back as integers in the same unit; textual timestamps are written back as RFC 3339.
 
 ### Supported timestamp formats
 
@@ -187,7 +189,7 @@ stream-replay-rs = { git = "https://github.com/reidlai/stream-replay-rs", featur
 tokio = { version = "1.40", features = ["full"] }
 ```
 
-Embed the `ReplayEngine` in a Rust service or test harness:
+Embed the `ReplayEngine` in a Rust service or test harness. `ReplayConfig::builder().max_records(n)` stops the replay after `n` records, which is useful for looped replays in tests (there is no CLI flag for it):
 
 ```rust
 use stream_replay_rs::config::ReplayConfig;
@@ -250,10 +252,10 @@ Every setting is also available as a key in the profile file. A CLI flag overrid
 | `--loop` | | off | Loop playback indefinitely at end of file |
 | `--advance-loop-timestamps` | | off | Advance timestamps monotonically on later loops |
 | `--loop-id-salt` | | off | Append `_L{n}` to entity IDs on loop iterations |
-| `--progress` | | on | Show the progress bar |
+| `--progress` / `--no-progress` | | on | Show or hide the progress bar |
 
 > [!NOTE]
-> **Transition status.** The code does not yet match every row above. `--speed` still defaults to `10x`, `--event-time`, `--timestamp-unit` and `--shift-column` are not implemented, `--speed` and `--rate` are not yet enforced as mutually exclusive, and the CLI still carries `--burst` and identity-provider authentication flags (`--auth-url`, `--svc-account`, `--svc-secret`, `--svc-token`) that this README does not document because the replayer is not tied to any identity provider. The repository also still bundles a sample dataset and a dev broker compose file that are not part of the generic tool. These are tracked in the replayer rework and in the crates.io publication story.
+> `--speed` and `--rate` are mutually exclusive. When a profile and a flag disagree, the flag wins: `--speed` replaces a profile `rate`, and `--rate` replaces a profile `speed`. When `--timestamp-column` is omitted, the pacing column is auto-detected (the first Parquet timestamp-typed column, otherwise a conventional name such as `timestamp`, `event_time` or `ts`).
 
 ---
 

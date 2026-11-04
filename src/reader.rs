@@ -1,5 +1,5 @@
 use crate::error::ReplayError;
-use crate::time_shift::parse_timestamp;
+use crate::time_shift::{parse_timestamp_with_unit, TimestampUnit};
 use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::datatypes::DataType;
 use chrono::{DateTime, TimeZone, Utc};
@@ -30,6 +30,7 @@ pub struct CsvRecordReader {
     key_col: Option<String>,
     csv_reader: csv::Reader<File>,
     headers: Vec<String>,
+    timestamp_unit: TimestampUnit,
 }
 
 impl CsvRecordReader {
@@ -62,7 +63,13 @@ impl CsvRecordReader {
             key_col: key_col.map(|s| s.to_string()),
             csv_reader,
             headers,
+            timestamp_unit: TimestampUnit::Auto,
         })
+    }
+
+    pub fn with_timestamp_unit(mut self, unit: TimestampUnit) -> Self {
+        self.timestamp_unit = unit;
+        self
     }
 }
 
@@ -100,7 +107,7 @@ impl RecordReader for CsvRecordReader {
                 };
 
                 if col_name == &self.timestamp_col {
-                    match parse_timestamp(val_str) {
+                    match parse_timestamp_with_unit(val_str, self.timestamp_unit) {
                         Ok(dt) => raw_timestamp = Some(dt),
                         Err(e) => {
                             warn!("Failed to parse timestamp in row: {}. Using now().", e);
@@ -165,6 +172,7 @@ pub struct JsonlRecordReader {
     key_col: Option<String>,
     lines: std::io::Lines<BufReader<File>>,
     line_number: usize,
+    timestamp_unit: TimestampUnit,
 }
 
 impl JsonlRecordReader {
@@ -183,7 +191,13 @@ impl JsonlRecordReader {
             key_col: key_col.map(|s| s.to_string()),
             lines,
             line_number: 0,
+            timestamp_unit: TimestampUnit::Auto,
         })
+    }
+
+    pub fn with_timestamp_unit(mut self, unit: TimestampUnit) -> Self {
+        self.timestamp_unit = unit;
+        self
     }
 }
 
@@ -222,8 +236,8 @@ impl RecordReader for JsonlRecordReader {
             })?;
 
             let timestamp = match raw_ts_val {
-                Value::String(s) => parse_timestamp(s)?,
-                Value::Number(n) => parse_timestamp(&n.to_string())?,
+                Value::String(s) => parse_timestamp_with_unit(s, self.timestamp_unit)?,
+                Value::Number(n) => parse_timestamp_with_unit(&n.to_string(), self.timestamp_unit)?,
                 _ => {
                     return Err(ReplayError::Dataset(format!(
                         "Timestamp field '{}' must be string or number at line {} in {:?}",
@@ -302,6 +316,7 @@ pub struct ParquetRecordReader {
     batch_reader: Box<dyn arrow::record_batch::RecordBatchReader + Send>,
     current_batch: Option<RecordBatch>,
     current_row: usize,
+    timestamp_unit: TimestampUnit,
 }
 
 impl ParquetRecordReader {
@@ -331,7 +346,13 @@ impl ParquetRecordReader {
             batch_reader,
             current_batch: None,
             current_row: 0,
+            timestamp_unit: TimestampUnit::Auto,
         })
+    }
+
+    pub fn with_timestamp_unit(mut self, unit: TimestampUnit) -> Self {
+        self.timestamp_unit = unit;
+        self
     }
 
     fn extract_record_from_batch(
@@ -339,6 +360,7 @@ impl ParquetRecordReader {
         row: usize,
         timestamp_col: &str,
         key_col: &Option<String>,
+        timestamp_unit: TimestampUnit,
     ) -> Result<ReplayRecord, ReplayError> {
         let mut map = Map::new();
         let schema = batch.schema();
@@ -452,7 +474,7 @@ impl ParquetRecordReader {
 
             if col_name == timestamp_col && raw_timestamp.is_none() {
                 if let Some(ref s) = str_rep {
-                    match parse_timestamp(s) {
+                    match parse_timestamp_with_unit(s, timestamp_unit) {
                         Ok(dt) => raw_timestamp = Some(dt),
                         Err(_) => raw_timestamp = Some(Utc::now()),
                     }
@@ -503,6 +525,7 @@ impl RecordReader for ParquetRecordReader {
                         self.current_row,
                         &self.timestamp_col,
                         &self.key_col,
+                        self.timestamp_unit,
                     )?;
                     self.current_row += 1;
                     return Ok(Some(rec));
@@ -551,13 +574,9 @@ impl RecordReader for ParquetRecordReader {
     }
 }
 
-pub fn create_reader(
-    path: &Path,
-    format_opt: Option<&str>,
-    timestamp_col: &str,
-    key_col: Option<&str>,
-) -> Result<Box<dyn RecordReader>, ReplayError> {
-    let format = match format_opt {
+/// Resolve the dataset format from an explicit name, the file extension or the file header.
+fn resolve_format(path: &Path, format_opt: Option<&str>) -> String {
+    match format_opt {
         Some(f) => f.to_lowercase(),
         None => {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -587,27 +606,136 @@ pub fn create_reader(
                 }
             }
         }
-    };
+    }
+}
+
+pub fn create_reader(
+    path: &Path,
+    format_opt: Option<&str>,
+    timestamp_col: &str,
+    key_col: Option<&str>,
+) -> Result<Box<dyn RecordReader>, ReplayError> {
+    create_reader_with_unit(
+        path,
+        format_opt,
+        timestamp_col,
+        key_col,
+        TimestampUnit::Auto,
+    )
+}
+
+pub fn create_reader_with_unit(
+    path: &Path,
+    format_opt: Option<&str>,
+    timestamp_col: &str,
+    key_col: Option<&str>,
+    timestamp_unit: TimestampUnit,
+) -> Result<Box<dyn RecordReader>, ReplayError> {
+    let format = resolve_format(path, format_opt);
 
     match format.as_str() {
-        "parquet" | "pq" => Ok(Box::new(ParquetRecordReader::new(
-            path,
-            timestamp_col,
-            key_col,
-        )?)),
-        "csv" => Ok(Box::new(CsvRecordReader::new(
-            path,
-            timestamp_col,
-            key_col,
-        )?)),
-        "jsonl" | "ndjson" | "jsonlines" => Ok(Box::new(JsonlRecordReader::new(
-            path,
-            timestamp_col,
-            key_col,
-        )?)),
+        "parquet" | "pq" => Ok(Box::new(
+            ParquetRecordReader::new(path, timestamp_col, key_col)?
+                .with_timestamp_unit(timestamp_unit),
+        )),
+        "csv" => Ok(Box::new(
+            CsvRecordReader::new(path, timestamp_col, key_col)?.with_timestamp_unit(timestamp_unit),
+        )),
+        "jsonl" | "ndjson" | "jsonlines" => Ok(Box::new(
+            JsonlRecordReader::new(path, timestamp_col, key_col)?
+                .with_timestamp_unit(timestamp_unit),
+        )),
         other => Err(ReplayError::Config(format!(
             "Unsupported dataset format: '{}'. Expected 'csv', 'parquet', or 'jsonl'",
             other
         ))),
     }
+}
+
+/// Column names that usually carry the event time, in order of preference.
+const PREFERRED_TIMESTAMP_NAMES: [&str; 8] = [
+    "timestamp",
+    "event_time",
+    "event_timestamp",
+    "event_ts",
+    "ts",
+    "time",
+    "datetime",
+    "created_at",
+];
+
+fn pick_timestamp_name(names: &[String]) -> Option<String> {
+    for preferred in PREFERRED_TIMESTAMP_NAMES {
+        if let Some(found) = names.iter().find(|n| n.to_lowercase() == preferred) {
+            return Some(found.clone());
+        }
+    }
+    names
+        .iter()
+        .find(|n| {
+            let lower = n.to_lowercase();
+            lower.contains("time") || lower.contains("date") || lower.ends_with("_ts")
+        })
+        .cloned()
+}
+
+/// Pick the pacing column when none was named: the first Parquet timestamp-typed
+/// column, otherwise the best match among conventional timestamp column names.
+pub fn detect_timestamp_column(
+    path: &Path,
+    format_opt: Option<&str>,
+) -> Result<String, ReplayError> {
+    let format = resolve_format(path, format_opt);
+    let mut typed: Vec<String> = Vec::new();
+    let names: Vec<String> = match format.as_str() {
+        "csv" => {
+            let mut rdr = csv::ReaderBuilder::new()
+                .has_headers(true)
+                .from_reader(File::open(path)?);
+            rdr.headers()?
+                .iter()
+                .map(|h| h.trim().to_string())
+                .collect()
+        }
+        "jsonl" | "ndjson" | "jsonlines" => {
+            let reader = BufReader::new(File::open(path)?);
+            let mut names = Vec::new();
+            for line in reader.lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Value::Object(map) = serde_json::from_str::<Value>(line.trim())? {
+                    names = map.keys().cloned().collect();
+                }
+                break;
+            }
+            names
+        }
+        "parquet" | "pq" => {
+            let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?;
+            let schema = builder.schema();
+            for field in schema.fields() {
+                if matches!(field.data_type(), DataType::Timestamp(_, _)) {
+                    typed.push(field.name().clone());
+                }
+            }
+            schema.fields().iter().map(|f| f.name().clone()).collect()
+        }
+        other => {
+            return Err(ReplayError::Config(format!(
+                "Unsupported dataset format: '{other}'. Expected 'csv', 'parquet', or 'jsonl'"
+            )))
+        }
+    };
+
+    typed
+        .into_iter()
+        .next()
+        .or_else(|| pick_timestamp_name(&names))
+        .ok_or_else(|| {
+            ReplayError::Config(format!(
+                "Could not auto-detect a timestamp column among {names:?}; pass --timestamp-column"
+            ))
+        })
 }

@@ -27,10 +27,7 @@ impl KafkaSink {
     }
 
     pub async fn connect(&mut self) -> Result<(), ReplayError> {
-        info!(
-            "Connecting to Kafka broker/Iggy gateway at {}",
-            self.broker_url
-        );
+        info!("Connecting to Kafka-protocol broker at {}", self.broker_url);
         // Clean broker host/port string
         let addr = self
             .broker_url
@@ -78,7 +75,7 @@ impl Sink for KafkaSink {
             offset = current_offset,
             key = %key_str,
             payload_len = payload.len(),
-            "Kafka/Iggy partition offset receipt confirmed"
+            "Kafka partition offset receipt confirmed"
         );
 
         Ok(())
@@ -90,7 +87,7 @@ impl Sink for KafkaSink {
             topic = %self.topic,
             partition = self.partition,
             committed_offset = final_offset,
-            "Flushed all pending records to Kafka/Iggy partition"
+            "Flushed all pending records to Kafka partition"
         );
         Ok(())
     }

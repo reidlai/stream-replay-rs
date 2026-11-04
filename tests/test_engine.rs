@@ -9,18 +9,18 @@ use tempfile::NamedTempFile;
 #[tokio::test]
 async fn test_engine_csv_replay_end_to_end() {
     let mut tmp = NamedTempFile::new().unwrap();
-    writeln!(tmp, "order_id,timestamp,value").unwrap();
-    writeln!(tmp, "ord_A,2017-01-01 10:00:00,10.0").unwrap();
-    writeln!(tmp, "ord_B,2017-01-01 10:00:05,20.0").unwrap();
-    writeln!(tmp, "ord_C,2017-01-01 10:00:10,30.0").unwrap();
+    writeln!(tmp, "id,timestamp,value").unwrap();
+    writeln!(tmp, "rec_A,2017-01-01 10:00:00,10.0").unwrap();
+    writeln!(tmp, "rec_B,2017-01-01 10:00:05,20.0").unwrap();
+    writeln!(tmp, "rec_C,2017-01-01 10:00:10,30.0").unwrap();
     tmp.flush().unwrap();
 
-    let sink = Arc::new(StdoutSink::new_silent("orders/intake"));
+    let sink = Arc::new(StdoutSink::new_silent("events/intake"));
 
     let config = ReplayConfig::builder()
         .file_path(tmp.path().to_path_buf())
         .timestamp_column("timestamp")
-        .key_column("order_id")
+        .key_column("id")
         .speed_multiplier(100.0) // high speed for fast test
         .progress(false)
         .build()
@@ -37,9 +37,9 @@ async fn test_engine_csv_replay_end_to_end() {
     assert_eq!(recorded.len(), 3);
 
     // Verify key
-    assert_eq!(recorded[0].1.as_deref(), Some("ord_A"));
-    assert_eq!(recorded[1].1.as_deref(), Some("ord_B"));
-    assert_eq!(recorded[2].1.as_deref(), Some("ord_C"));
+    assert_eq!(recorded[0].1.as_deref(), Some("rec_A"));
+    assert_eq!(recorded[1].1.as_deref(), Some("rec_B"));
+    assert_eq!(recorded[2].1.as_deref(), Some("rec_C"));
 
     // Verify timestamps are shifted to live UTC time and monotonic
     let json0: serde_json::Value = serde_json::from_slice(&recorded[0].2).unwrap();
@@ -55,21 +55,22 @@ async fn test_engine_csv_replay_end_to_end() {
 }
 
 #[tokio::test]
-async fn test_engine_burst_mode() {
+async fn test_engine_max_records_limit() {
     let mut tmp = NamedTempFile::new().unwrap();
-    writeln!(tmp, "order_id,timestamp,value").unwrap();
+    writeln!(tmp, "id,timestamp,value").unwrap();
     for i in 0..20 {
-        writeln!(tmp, "ord_{i:03},2017-01-01 10:{i:02}:00,10.0").unwrap();
+        writeln!(tmp, "rec_{i:03},2017-01-01 10:{i:02}:00,10.0").unwrap();
     }
     tmp.flush().unwrap();
 
-    let sink = Arc::new(StdoutSink::new_silent("orders/burst"));
+    let sink = Arc::new(StdoutSink::new_silent("events/limit"));
 
     let config = ReplayConfig::builder()
         .file_path(tmp.path().to_path_buf())
         .timestamp_column("timestamp")
-        .key_column("order_id")
-        .burst(5) // Only emit 5 in burst
+        .key_column("id")
+        .max_records(5) // Stop after 5 records
+        .speed_multiplier(0.0)
         .progress(false)
         .build()
         .unwrap();
@@ -104,45 +105,37 @@ speed = 5.0
 loop_playback = true
 advance_loop_timestamps = true
 loop_id_salt = true
-auth_url = "https://localhost:8443"
-service_account = "svc_stream_replay"
-service_secret = "m2m_secret_val"
-auth_token = "m2m_token_val"
 "#
     )
     .unwrap();
     tmp_profile.flush().unwrap();
 
     let config = ReplayConfig::from_profile_file(tmp_profile.path()).unwrap();
-    assert_eq!(config.timestamp_column, "timestamp");
+    assert_eq!(config.timestamp_column.as_deref(), Some("timestamp"));
     assert_eq!(config.speed_multiplier, 5.0);
     assert!(config.loop_playback);
     assert!(config.advance_loop_timestamps);
     assert!(config.loop_id_salt);
-    assert_eq!(config.auth_url.as_deref(), Some("https://localhost:8443"));
-    assert_eq!(config.service_account.as_deref(), Some("svc_stream_replay"));
-    assert_eq!(config.service_secret.as_deref(), Some("m2m_secret_val"));
-    assert_eq!(config.auth_token.as_deref(), Some("m2m_token_val"));
 }
 
 #[tokio::test]
 async fn test_engine_loop_playback_salting_and_advance() {
     let mut tmp = NamedTempFile::new().unwrap();
-    writeln!(tmp, "order_id,timestamp,value").unwrap();
-    writeln!(tmp, "ord_100,2026-10-30 08:00:00,10.0").unwrap();
-    writeln!(tmp, "ord_200,2026-10-30 08:05:00,20.0").unwrap();
+    writeln!(tmp, "id,timestamp,value").unwrap();
+    writeln!(tmp, "rec_100,2026-10-30 08:00:00,10.0").unwrap();
+    writeln!(tmp, "rec_200,2026-10-30 08:00:05,20.0").unwrap();
     tmp.flush().unwrap();
 
-    let sink = Arc::new(StdoutSink::new_silent("orders/loop_test"));
+    let sink = Arc::new(StdoutSink::new_silent("events/loop_test"));
 
     let config = ReplayConfig::builder()
         .file_path(tmp.path().to_path_buf())
         .timestamp_column("timestamp")
-        .key_column("order_id")
+        .key_column("id")
         .loop_playback(true)
         .advance_loop_timestamps(true)
         .loop_id_salt(true)
-        .burst(4) // 2 records * 2 loops = 4 records
+        .max_records(4) // 2 records * 2 loops = 4 records
         .speed_multiplier(100.0)
         .progress(false)
         .build()
@@ -159,19 +152,19 @@ async fn test_engine_loop_playback_salting_and_advance() {
     assert_eq!(recorded.len(), 4);
 
     // Loop 0 keys: original
-    assert_eq!(recorded[0].1.as_deref(), Some("ord_100"));
-    assert_eq!(recorded[1].1.as_deref(), Some("ord_200"));
+    assert_eq!(recorded[0].1.as_deref(), Some("rec_100"));
+    assert_eq!(recorded[1].1.as_deref(), Some("rec_200"));
 
     // Loop 1 keys: salted with _L1
-    assert_eq!(recorded[2].1.as_deref(), Some("ord_100_L1"));
-    assert_eq!(recorded[3].1.as_deref(), Some("ord_200_L1"));
+    assert_eq!(recorded[2].1.as_deref(), Some("rec_100_L1"));
+    assert_eq!(recorded[3].1.as_deref(), Some("rec_200_L1"));
 
     // Check payload JSON keys and timestamps
     let p0: serde_json::Value = serde_json::from_slice(&recorded[0].2).unwrap();
     let p2: serde_json::Value = serde_json::from_slice(&recorded[2].2).unwrap();
 
-    assert_eq!(p0["order_id"], "ord_100");
-    assert_eq!(p2["order_id"], "ord_100_L1");
+    assert_eq!(p0["id"], "rec_100");
+    assert_eq!(p2["id"], "rec_100_L1");
 
     let t0: DateTime<Utc> = p0["timestamp"].as_str().unwrap().parse().unwrap();
     let t2: DateTime<Utc> = p2["timestamp"].as_str().unwrap().parse().unwrap();
@@ -218,7 +211,8 @@ async fn test_engine_parquet_replay() {
         .file_format("parquet")
         .timestamp_column("created_at")
         .key_column("item_id")
-        .burst(2)
+        .max_records(2)
+        .speed_multiplier(0.0)
         .progress(false)
         .build()
         .unwrap();

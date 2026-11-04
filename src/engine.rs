@@ -1,14 +1,14 @@
-use crate::auth::M2MAuthenticator;
 use crate::config::ReplayConfig;
 use crate::error::ReplayError;
-use crate::reader::{create_reader, RecordReader};
+use crate::reader::{create_reader_with_unit, detect_timestamp_column, RecordReader};
 use crate::sink::{create_sink, Sink, SinkType};
-use crate::time_shift::TimeShiftEngine;
+use crate::time_shift::{render_like, shift_value, TimeShiftEngine};
 use chrono::Utc;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::time::{sleep, Duration};
+use tokio::time::sleep;
 use tracing::{info, warn};
 
 pub struct ReplayStats {
@@ -21,42 +21,57 @@ pub struct ReplayStats {
 
 pub struct ReplayEngine {
     config: ReplayConfig,
+    timestamp_column: String,
     sink: Box<dyn Sink>,
     reader: Box<dyn RecordReader>,
     time_engine: TimeShiftEngine,
-    authenticator: M2MAuthenticator,
     custom_sink: Option<Arc<dyn Sink>>,
 }
 
 impl ReplayEngine {
     pub async fn new(config: ReplayConfig) -> Result<Self, ReplayError> {
+        config.validate()?;
+
         let sink = create_sink(&config.sink).await?;
-        let reader = create_reader(
+        let timestamp_column = match config.timestamp_column.clone() {
+            Some(column) => column,
+            None => {
+                let detected = detect_timestamp_column(
+                    &config.input_file_path,
+                    config.input_file_format.as_deref(),
+                )?;
+                info!("Auto-detected timestamp column '{detected}'");
+                detected
+            }
+        };
+        let reader = create_reader_with_unit(
             &config.input_file_path,
             config.input_file_format.as_deref(),
-            &config.timestamp_column,
+            &timestamp_column,
             config.key_column.as_deref(),
+            config.timestamp_unit,
         )?;
 
+        // A fixed rate ignores the dataset spacing, so payload time follows the wall clock.
+        let effective_speed = if config.rate.is_some() {
+            0.0
+        } else {
+            config.speed_multiplier
+        };
         let time_engine = TimeShiftEngine::new(
             config.shift_timestamps,
             config.advance_loop_timestamps,
             config.loop_id_salt,
-        );
-
-        let authenticator = M2MAuthenticator::new(
-            config.auth_url.clone(),
-            config.service_account.clone(),
-            config.service_secret.clone(),
-            config.auth_token.clone(),
-        );
+        )
+        .with_speed(effective_speed)
+        .with_event_time(config.event_time);
 
         Ok(Self {
             config,
+            timestamp_column,
             sink,
             reader,
             time_engine,
-            authenticator,
             custom_sink: None,
         })
     }
@@ -66,19 +81,19 @@ impl ReplayEngine {
         self
     }
 
-    pub fn authenticator(&self) -> &M2MAuthenticator {
-        &self.authenticator
+    /// The pacing column in use (the configured one, or the auto-detected one).
+    pub fn timestamp_column(&self) -> &str {
+        &self.timestamp_column
+    }
+
+    fn limit_reached(&self, total_records: u64) -> bool {
+        self.config
+            .max_records
+            .is_some_and(|limit| total_records >= limit)
     }
 
     pub async fn run(&mut self) -> Result<ReplayStats, ReplayError> {
         let mut total_records = 0u64;
-
-        // Perform M2M authentication pre-flight
-        let _token = self.authenticator.authenticate().await?;
-        info!(
-            "M2M Authentication active for service account '{}'",
-            self.authenticator.service_account
-        );
 
         // Extract dataset bounds
         match self.reader.get_bounds() {
@@ -114,69 +129,93 @@ impl ReplayEngine {
             SinkType::Iceoryx2 { service_name } => service_name.clone(),
         };
 
-        let mut first_emitted: Option<chrono::DateTime<Utc>> = None;
-        let mut first_instant: Option<Instant> = None;
-
-        let max_records = self.config.burst;
-        let start_instant = Instant::now();
+        // Anchor the replay to the live clock: T_start = now(). The same moment starts the
+        // wall-clock schedule, so event time and wall-clock time agree under `compress`.
+        let replay_start = Instant::now();
+        self.time_engine.start_time = Utc::now();
+        let start_instant = replay_start;
+        let mut warned_columns: HashSet<String> = HashSet::new();
 
         loop {
-            if let Some(burst_limit) = max_records {
-                if total_records as usize >= burst_limit {
-                    break;
-                }
+            if self.limit_reached(total_records) {
+                break;
             }
+            let mut records_in_pass = 0u64;
 
             while let Some(mut record) = self.reader.next_record()? {
+                records_in_pass += 1;
+
+                // Pacing: sleep until this record is due.
+                let due = match self.config.rate {
+                    Some(rate) => Some(std::time::Duration::from_secs_f64(
+                        total_records as f64 / rate as f64,
+                    )),
+                    None => self
+                        .time_engine
+                        .schedule_offset(record.timestamp)
+                        .and_then(|offset| offset.to_std().ok()),
+                };
+                if let Some(due) = due {
+                    let deadline = replay_start + due;
+                    let now = Instant::now();
+                    if deadline > now {
+                        sleep(deadline - now).await;
+                    }
+                }
+
                 // Monotonic time transformation
-                let emitted_time = self.time_engine.calculate_emitted_time(record.timestamp);
+                let raw_time = record.timestamp;
+                let emitted_time = self.time_engine.calculate_emitted_time(raw_time);
 
                 // ID salting
+                let original_key = record.key.clone();
                 if let Some(ref k) = record.key {
                     record.key = Some(self.time_engine.salt_entity_id(k));
                 }
 
-                // Update payload timestamp field
                 if let serde_json::Value::Object(ref mut map) = record.payload {
-                    map.insert(
-                        self.config.timestamp_column.clone(),
-                        serde_json::Value::String(emitted_time.to_rfc3339()),
-                    );
-                    if let Some(ref k) = record.key {
-                        if let Some(k_col) = self
-                            .config
-                            .key_column
-                            .as_ref()
-                            .or(record.key_source_column.as_ref())
-                        {
-                            map.insert(k_col.clone(), serde_json::Value::String(k.clone()));
-                        }
-                    }
-                }
+                    if self.config.shift_timestamps {
+                        let unit = self.config.timestamp_unit;
+                        let offset = emitted_time - raw_time;
 
-                // Rate / pacing control
-                if max_records.is_none() {
-                    if let Some(rate) = self.config.rate {
-                        if let Some(interval_micros) = 1_000_000u64.checked_div(rate) {
-                            sleep(Duration::from_micros(interval_micros)).await;
-                        }
-                    } else if self.config.speed_multiplier > 0.0 {
-                        if let (Some(t_first), Some(i_first)) = (first_emitted, first_instant) {
-                            let dataset_elapsed =
-                                (emitted_time - t_first).num_microseconds().unwrap_or(0);
-                            if dataset_elapsed > 0 {
-                                let scaled_micros =
-                                    (dataset_elapsed as f64 / self.config.speed_multiplier) as u64;
-                                let actual_elapsed_micros = i_first.elapsed().as_micros() as u64;
-                                if scaled_micros > actual_elapsed_micros {
-                                    let diff = scaled_micros - actual_elapsed_micros;
-                                    // Cap sleep to prevent excessive hangs on sparse datasets
-                                    sleep(Duration::from_micros(diff.min(10_000_000))).await;
+                        let rewritten = match map.get(&self.timestamp_column) {
+                            Some(original) => render_like(original, emitted_time, unit),
+                            None => serde_json::Value::String(emitted_time.to_rfc3339()),
+                        };
+                        map.insert(self.timestamp_column.clone(), rewritten);
+
+                        for column in &self.config.shift_columns {
+                            let Some(original) = map.get(column) else {
+                                continue;
+                            };
+                            if original.is_null() {
+                                continue;
+                            }
+                            match shift_value(original, offset, unit) {
+                                Some(shifted) => {
+                                    map.insert(column.clone(), shifted);
+                                }
+                                None => {
+                                    if warned_columns.insert(column.clone()) {
+                                        warn!(
+                                            "Cannot interpret a value of shift column '{column}' as a timestamp; leaving it unchanged"
+                                        );
+                                    }
                                 }
                             }
-                        } else {
-                            first_emitted = Some(emitted_time);
-                            first_instant = Some(Instant::now());
+                        }
+                    }
+
+                    // Keep the key column in step with the salted entity key
+                    if record.key != original_key {
+                        if let (Some(k), Some(k_col)) = (
+                            record.key.as_ref(),
+                            self.config
+                                .key_column
+                                .as_ref()
+                                .or(record.key_source_column.as_ref()),
+                        ) {
+                            map.insert(k_col.clone(), serde_json::Value::String(k.clone()));
                         }
                     }
                 }
@@ -199,24 +238,18 @@ impl ReplayEngine {
                     p.inc(1);
                 }
 
-                if let Some(burst_limit) = max_records {
-                    if total_records as usize >= burst_limit {
-                        break;
-                    }
-                }
-            }
-
-            if let Some(burst_limit) = max_records {
-                if total_records as usize >= burst_limit {
+                if self.limit_reached(total_records) {
                     break;
                 }
             }
 
-            if self.config.loop_playback {
+            if self.limit_reached(total_records) {
+                break;
+            }
+
+            if self.config.loop_playback && records_in_pass > 0 {
                 self.time_engine.advance_loop();
                 self.reader.reset()?;
-                first_emitted = None;
-                first_instant = None;
                 info!(
                     "Dataset EOF reached. Advanced to loop {}",
                     self.time_engine.loop_count

@@ -1,21 +1,17 @@
 use clap::Parser;
 use std::path::PathBuf;
 use std::process::exit;
-use stream_replay_rs::config::ReplayConfig;
+use stream_replay_rs::config::{parse_speed_preset, sink_from_parts, sink_parts, ReplayConfig};
 use stream_replay_rs::engine::ReplayEngine;
-use stream_replay_rs::sink::SinkType;
+use stream_replay_rs::error::ReplayError;
+use stream_replay_rs::time_shift::{EventTimeMode, TimestampUnit};
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "stream-replay-rs",
-    author = "FerrousCX Contributors",
-    version = "0.1.0",
-    about = "Generic streaming traffic replay engine and terminal CLI binary"
-)]
+#[command(name = "stream-replay-rs", version, about)]
 pub struct CliArgs {
-    /// Path to replay profile configuration file (.toml)
+    /// Path to a replay profile (.toml); command-line flags override it
     #[arg(short, long)]
     pub config: Option<PathBuf>,
 
@@ -27,37 +23,55 @@ pub struct CliArgs {
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 
-    /// Target streaming sink: 'kafka', 'nats', 'fluvio', 'iceoryx2', or 'stdout'
-    #[arg(short, long, default_value = "stdout")]
-    pub sink: String,
+    /// Target sink: 'kafka', 'nats', 'fluvio', 'iceoryx2', or 'stdout' [default: stdout]
+    #[arg(short, long)]
+    pub sink: Option<String>,
 
-    /// Target broker connection URL
-    #[arg(short = 'u', long, default_value = "localhost:9092")]
-    pub sink_url: String,
+    /// Target broker connection URL [default: localhost:9092]
+    #[arg(short = 'u', long)]
+    pub sink_url: Option<String>,
 
-    /// Destination topic or subject name
-    #[arg(short, long, default_value = "events")]
-    pub topic: String,
+    /// Destination topic, subject or channel [default: events]
+    #[arg(short, long)]
+    pub topic: Option<String>,
 
-    /// Target iceoryx2 service name (when --sink iceoryx2)
-    #[arg(long, default_value = "stream_replay_events")]
-    pub service_name: String,
-
-    /// Playback speed multiplier (e.g. 1.0, 10x, 50x, max) [default: 10x]
+    /// Target iceoryx2 service name (when --sink iceoryx2) [default: stream_replay_events]
     #[arg(long)]
+    pub service_name: Option<String>,
+
+    /// Roll the dataset forward N times faster than its original spacing
+    /// (1, 2.5, 10x, or max for no pacing) [default: 1.0]
+    #[arg(long, conflicts_with = "rate")]
     pub speed: Option<String>,
 
-    /// Fixed target injection rate in events/second (overrides speed)
-    #[arg(short, long)]
+    /// Fixed events per second, ignoring the dataset's own spacing
+    #[arg(short, long, value_parser = clap::value_parser!(u64).range(1..))]
     pub rate: Option<u64>,
 
-    /// Shift relative timestamps anchoring first record to now
-    #[arg(long, default_value_t = true)]
+    /// Pacing column that drives the emit schedule [default: auto-detect]
+    #[arg(long)]
+    pub timestamp_column: Option<String>,
+
+    /// Unit of numeric timestamps: auto, s, ms, us, ns or rfc3339 [default: auto]
+    #[arg(long, value_enum)]
+    pub timestamp_unit: Option<TimestampUnit>,
+
+    /// Another timestamp column to rebase by the same offset (repeatable)
+    #[arg(long = "shift-column", value_name = "COL")]
+    pub shift_column: Vec<String>,
+
+    /// Rewrite payload timestamps onto the live clock [default]
+    #[arg(long, overrides_with = "no_shift_timestamps")]
     pub shift_timestamps: bool,
 
-    /// Timestamp column name in dataset
-    #[arg(long, default_value = "timestamp")]
-    pub timestamp_column: String,
+    /// Pass payload timestamps through unchanged; pacing still applies
+    #[arg(long, overrides_with = "shift_timestamps")]
+    pub no_shift_timestamps: bool,
+
+    /// Whether rewritten payload timestamps follow the compressed schedule or keep the
+    /// original spacing when the speed is not 1 [default: compress]
+    #[arg(long, value_enum)]
+    pub event_time: Option<EventTimeMode>,
 
     /// Key/ID column name in dataset
     #[arg(long)]
@@ -75,29 +89,95 @@ pub struct CliArgs {
     #[arg(long, default_value_t = false)]
     pub loop_id_salt: bool,
 
-    /// Display terminal interactive progress bar
-    #[arg(long, default_value_t = true)]
+    /// Show the progress bar [default]
+    #[arg(long, overrides_with = "no_progress")]
     pub progress: bool,
 
-    /// Micro-burst testing: inject N events immediately
-    #[arg(long)]
-    pub burst: Option<usize>,
+    /// Hide the progress bar
+    #[arg(long, overrides_with = "progress")]
+    pub no_progress: bool,
+}
 
-    /// Kanidm authentication service URL
-    #[arg(long)]
-    pub auth_url: Option<String>,
+/// Resolve the effective configuration: the profile (if any), then command-line overrides.
+pub fn build_config(args: CliArgs) -> Result<ReplayConfig, ReplayError> {
+    let mut cfg = match args.config {
+        Some(ref profile_path) => ReplayConfig::from_profile_file(profile_path)?,
+        None => ReplayConfig::default(),
+    };
 
-    /// Kanidm M2M service account ID [default: svc_stream_replay]
-    #[arg(long)]
-    pub svc_account: Option<String>,
+    if let Some(p) = args.input_file_path {
+        cfg.input_file_path = p;
+    }
+    if cfg.input_file_path.as_os_str().is_empty() {
+        return Err(ReplayError::Config(
+            "Either --config (with an input path) or --input-file-path must be specified."
+                .to_string(),
+        ));
+    }
+    if let Some(f) = args.input_file_format {
+        cfg.input_file_format = Some(f);
+    }
 
-    /// Kanidm M2M service account client secret
-    #[arg(long)]
-    pub svc_secret: Option<String>,
+    if args.sink.is_some()
+        || args.sink_url.is_some()
+        || args.topic.is_some()
+        || args.service_name.is_some()
+    {
+        let (kind, url, topic, service_name) = sink_parts(&cfg.sink);
+        cfg.sink = sink_from_parts(
+            &args.sink.unwrap_or(kind),
+            args.sink_url.unwrap_or(url),
+            args.topic.unwrap_or(topic),
+            args.service_name.unwrap_or(service_name),
+        )?;
+    }
 
-    /// Kanidm M2M pre-issued bearer token
-    #[arg(long)]
-    pub svc_token: Option<String>,
+    if let Some(ref speed) = args.speed {
+        cfg.speed_multiplier = parse_speed_preset(speed)?;
+        cfg.rate = None;
+    }
+    if let Some(rate) = args.rate {
+        cfg.rate = Some(rate);
+    }
+
+    if let Some(c) = args.timestamp_column {
+        cfg.timestamp_column = Some(c);
+    }
+    if let Some(unit) = args.timestamp_unit {
+        cfg.timestamp_unit = unit;
+    }
+    if !args.shift_column.is_empty() {
+        cfg.shift_columns = args.shift_column;
+    }
+    if args.no_shift_timestamps {
+        cfg.shift_timestamps = false;
+    } else if args.shift_timestamps {
+        cfg.shift_timestamps = true;
+    }
+    if let Some(mode) = args.event_time {
+        cfg.event_time = mode;
+    }
+    if let Some(k) = args.key_column {
+        cfg.key_column = Some(k);
+    }
+
+    if args.r#loop {
+        cfg.loop_playback = true;
+    }
+    if args.advance_loop_timestamps {
+        cfg.advance_loop_timestamps = true;
+    }
+    if args.loop_id_salt {
+        cfg.loop_id_salt = true;
+    }
+    if args.no_progress {
+        cfg.progress = false;
+    } else if args.progress {
+        cfg.progress = true;
+    }
+
+    cfg.validate()?;
+    Ok(cfg)
 }
 
 #[tokio::main]
@@ -107,161 +187,29 @@ async fn main() {
         .finish();
     let _ = tracing::subscriber::set_global_default(subscriber);
 
-    let args = CliArgs::parse();
-
-    let config = if let Some(ref profile_path) = args.config {
-        match ReplayConfig::from_profile_file(profile_path) {
-            Ok(mut cfg) => {
-                // Allow CLI arguments to override profile defaults
-                if let Some(p) = args.input_file_path {
-                    cfg.input_file_path = p;
-                }
-                if let Some(f) = args.input_file_format {
-                    cfg.input_file_format = Some(f);
-                }
-                if let Some(ref speed_str) = args.speed {
-                    match stream_replay_rs::config::parse_speed_preset(speed_str) {
-                        Ok(parsed_speed) => {
-                            cfg.speed_multiplier = parsed_speed;
-                        }
-                        Err(e) => {
-                            error!("Invalid CLI --speed argument: {e}");
-                            exit(1);
-                        }
-                    }
-                }
-                if args.rate.is_some() {
-                    cfg.rate = args.rate;
-                }
-                if args.r#loop {
-                    cfg.loop_playback = true;
-                }
-                if args.advance_loop_timestamps {
-                    cfg.advance_loop_timestamps = true;
-                }
-                if args.loop_id_salt {
-                    cfg.loop_id_salt = true;
-                }
-                if args.burst.is_some() {
-                    cfg.burst = args.burst;
-                }
-                if let Some(u) = args.auth_url {
-                    cfg.auth_url = Some(u);
-                }
-                if let Some(a) = args.svc_account {
-                    cfg.service_account = Some(a);
-                }
-                if let Some(s) = args.svc_secret {
-                    cfg.service_secret = Some(s);
-                }
-                if let Some(t) = args.svc_token {
-                    cfg.auth_token = Some(t);
-                }
-                cfg
-            }
-            Err(e) => {
-                error!("Failed to load configuration profile: {e}");
-                exit(1);
-            }
-        }
-    } else {
-        let file_path = match args.input_file_path {
-            Some(p) => p,
-            None => {
-                error!("Error: Either --config or --input-file-path must be specified.");
-                exit(1);
-            }
-        };
-
-        let sink = match args.sink.to_lowercase().as_str() {
-            "kafka" => SinkType::Kafka {
-                broker_url: args.sink_url,
-                topic: args.topic,
-            },
-            "nats" => SinkType::Nats {
-                url: args.sink_url,
-                topic: args.topic,
-            },
-            "fluvio" => SinkType::Fluvio {
-                url: args.sink_url,
-                topic: args.topic,
-            },
-            "iceoryx2" => SinkType::Iceoryx2 {
-                service_name: args.service_name,
-            },
-            _ => SinkType::Stdout { topic: args.topic },
-        };
-
-        let mut timestamp_col = args.timestamp_column;
-        let mut key_col = args.key_column;
-
-        // Auto-detect Olist schema conventions if not explicitly provided
-        if file_path.to_string_lossy().contains("olist") {
-            if timestamp_col == "timestamp" {
-                timestamp_col = "order_purchase_timestamp".to_string();
-            }
-            if key_col.is_none() {
-                key_col = Some("order_id".to_string());
-            }
-        }
-
-        // Auto-generate sample olist dataset if missing
-        if !file_path.exists()
-            && file_path.to_string_lossy().contains("olist")
-            && file_path.extension().is_none_or(|ext| ext == "parquet")
-        {
-            info!(
-                "Target Olist dataset {:?} does not exist. Auto-generating 1,000 orders...",
-                file_path
-            );
-            if let Err(e) =
-                stream_replay_rs::data_generator::generate_olist_orders_parquet(&file_path, 1000)
-            {
-                error!("Failed to generate sample Olist dataset: {e}");
-            }
-        }
-
-        let speed_str = args.speed.as_deref().unwrap_or("10x");
-        let speed_multiplier = match stream_replay_rs::config::parse_speed_preset(speed_str) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Invalid CLI --speed argument: {e}");
-                exit(1);
-            }
-        };
-
-        ReplayConfig {
-            input_file_path: file_path,
-            input_file_format: args.input_file_format,
-            sink,
-            speed_multiplier,
-            rate: args.rate,
-            shift_timestamps: args.shift_timestamps,
-            timestamp_column: timestamp_col,
-            key_column: key_col,
-            loop_playback: args.r#loop,
-            advance_loop_timestamps: args.advance_loop_timestamps,
-            loop_id_salt: args.loop_id_salt,
-            progress: args.progress,
-            burst: args.burst,
-            auth_url: args.auth_url,
-            service_account: args.svc_account,
-            service_secret: args.svc_secret,
-            auth_token: args.svc_token,
+    let config = match build_config(CliArgs::parse()) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("Invalid configuration: {e}");
+            exit(1);
         }
     };
 
+    let pacing = match config.rate {
+        Some(rate) => format!("rate={rate}/s"),
+        None => format!("speed={}x", config.speed_multiplier),
+    };
     info!(
-        "Starting stream-replay-rs: input={:?}, sink={:?}, speed={}x, loop={}",
-        config.input_file_path, config.sink, config.speed_multiplier, config.loop_playback
+        "Starting stream-replay-rs: input={:?}, sink={:?}, {}, loop={}",
+        config.input_file_path, config.sink, pacing, config.loop_playback
     );
 
     match ReplayEngine::new(config).await {
         Ok(mut engine) => match engine.run().await {
             Ok(stats) => {
                 info!(
-                    "Replay finished successfully: {} records dispatched in {:.2?} ({:.1} msgs/s, offsets={}, loops={})",
-                    stats.total_records, stats.elapsed, stats.records_per_sec, stats.partition_offsets, stats.loops_completed
+                    "Replay finished successfully: {} records dispatched in {:.2?} ({:.1} msgs/s, loops={})",
+                    stats.total_records, stats.elapsed, stats.records_per_sec, stats.loops_completed
                 );
             }
             Err(e) => {
@@ -273,5 +221,130 @@ async fn main() {
             error!("Failed to initialize ReplayEngine: {e}");
             exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+    use stream_replay_rs::sink::SinkType;
+
+    fn parse(extra: &[&str]) -> Result<CliArgs, clap::Error> {
+        let mut argv = vec!["stream-replay-rs", "--input-file-path", "events.csv"];
+        argv.extend_from_slice(extra);
+        CliArgs::try_parse_from(argv)
+    }
+
+    #[test]
+    fn default_speed_is_one_with_original_spacing() {
+        let cfg = build_config(parse(&[]).unwrap()).unwrap();
+        assert_eq!(cfg.speed_multiplier, 1.0);
+        assert_eq!(cfg.rate, None);
+        assert_eq!(cfg.event_time, EventTimeMode::Compress);
+        assert_eq!(cfg.timestamp_unit, TimestampUnit::Auto);
+        assert!(cfg.shift_timestamps);
+        assert!(cfg.shift_columns.is_empty());
+        assert!(cfg.timestamp_column.is_none());
+    }
+
+    #[test]
+    fn speed_formats_are_accepted() {
+        for (raw, expected) in [("10x", 10.0), ("10", 10.0), ("2.5", 2.5), ("max", 0.0)] {
+            let cfg = build_config(parse(&["--speed", raw]).unwrap()).unwrap();
+            assert_eq!(cfg.speed_multiplier, expected, "--speed {raw}");
+        }
+        assert!(build_config(parse(&["--speed", "fast"]).unwrap()).is_err());
+    }
+
+    #[test]
+    fn speed_and_rate_are_mutually_exclusive() {
+        let err = parse(&["--speed", "10x", "--rate", "25"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+        let err = parse(&["--rate", "25", "--speed", "10x"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+
+        let cfg = build_config(parse(&["--rate", "25"]).unwrap()).unwrap();
+        assert_eq!(cfg.rate, Some(25));
+        assert!(parse(&["--rate", "0"]).is_err());
+    }
+
+    #[test]
+    fn new_timestamp_flags_are_parsed() {
+        let cfg = build_config(
+            parse(&[
+                "--event-time",
+                "preserve",
+                "--timestamp-unit",
+                "ms",
+                "--timestamp-column",
+                "event_ts",
+                "--shift-column",
+                "ready_ts",
+                "--shift-column",
+                "done_ts",
+                "--no-shift-timestamps",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cfg.event_time, EventTimeMode::Preserve);
+        assert_eq!(cfg.timestamp_unit, TimestampUnit::Millis);
+        assert_eq!(cfg.timestamp_column.as_deref(), Some("event_ts"));
+        assert_eq!(cfg.shift_columns, vec!["ready_ts", "done_ts"]);
+        assert!(!cfg.shift_timestamps);
+        assert!(parse(&["--timestamp-unit", "minutes"]).is_err());
+        assert!(parse(&["--event-time", "stretch"]).is_err());
+    }
+
+    #[test]
+    fn removed_flags_are_rejected() {
+        for flag in [
+            "--burst",
+            "--auth-url",
+            "--svc-account",
+            "--svc-secret",
+            "--svc-token",
+        ] {
+            let err = parse(&[flag, "1"]).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::UnknownArgument, "{flag}");
+        }
+    }
+
+    #[test]
+    fn sink_flags_default_to_stdout_and_override_independently() {
+        let cfg = build_config(parse(&[]).unwrap()).unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Stdout {
+                topic: "events".to_string()
+            }
+        );
+
+        let cfg = build_config(
+            parse(&[
+                "--sink",
+                "kafka",
+                "--sink-url",
+                "broker:9092",
+                "--topic",
+                "t",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Kafka {
+                broker_url: "broker:9092".to_string(),
+                topic: "t".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn missing_input_is_an_error() {
+        let args = CliArgs::try_parse_from(["stream-replay-rs"]).unwrap();
+        assert!(build_config(args).is_err());
     }
 }

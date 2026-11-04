@@ -27,35 +27,23 @@ async fn test_sink_factory_creation() {
     })
     .await;
     assert!(s_stdout.is_ok());
+}
 
-    // Kafka
-    let s_kafka = create_sink(&SinkType::Kafka {
-        broker_url: "localhost:9092".into(),
+/// There is no simulated mode: a Kafka sink without a reachable endpoint is an error.
+#[tokio::test]
+async fn test_kafka_sink_fails_without_an_endpoint() {
+    // Bind and drop a listener to get a local port that nothing listens on.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let result = create_sink(&SinkType::Kafka {
+        broker_url: format!("127.0.0.1:{port}"),
         topic: "orders".into(),
     })
     .await;
-    assert!(s_kafka.is_ok());
-
-    // NATS
-    let s_nats = create_sink(&SinkType::Nats {
-        url: "localhost:4222".into(),
-        topic: "orders.jetstream".into(),
-    })
-    .await;
-    assert!(s_nats.is_ok());
-
-    // Fluvio
-    let s_fluvio = create_sink(&SinkType::Fluvio {
-        url: "localhost:9003".into(),
-        topic: "fluvio-orders".into(),
-    })
-    .await;
-    assert!(s_fluvio.is_ok());
-
-    // iceoryx2
-    let s_iceoryx2 = create_sink(&SinkType::Iceoryx2 {
-        service_name: "shared_mem_orders".into(),
-    })
-    .await;
-    assert!(s_iceoryx2.is_ok());
+    assert!(
+        result.is_err(),
+        "an unreachable endpoint must fail, not simulate"
+    );
 }

@@ -141,23 +141,17 @@ fn test_readme_documentation_completeness() {
         );
     }
 
-    // Must document all supported sinks
+    // Must document the Kafka sink, and must not claim sinks that do not exist
     assert!(
         readme.contains("kafka") || readme.contains("Kafka"),
         "README must document Kafka sink"
     );
-    assert!(
-        readme.contains("nats") || readme.contains("NATS"),
-        "README must document NATS sink"
-    );
-    assert!(
-        readme.contains("fluvio") || readme.contains("Fluvio"),
-        "README must document Fluvio sink"
-    );
-    assert!(
-        readme.contains("iceoryx2"),
-        "README must document iceoryx2 sink"
-    );
+    for removed in ["NATS", "Fluvio", "iceoryx2"] {
+        assert!(
+            !readme.contains(removed),
+            "README must not claim the {removed} sink: it is not implemented"
+        );
+    }
 
     // Must document library API & Feature flags
     assert!(

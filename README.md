@@ -1,10 +1,10 @@
 # stream-replay-rs
 
 > **Generic, high-throughput event replayer in pure Rust**  
-> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Kafka-protocol brokers, NATS JetStream or Fluvio.
+> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to any Kafka-compatible endpoint.
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#-license)
-[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](#-requirements--installation)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#-requirements--installation)
 [![Tier](https://img.shields.io/badge/DevSecOps-Tier%201%20Shift--Left-brightgreen.svg)](#-tier-1-devsecops--security-gate)
 
 ---
@@ -31,9 +31,6 @@ flowchart TD
 
     subgraph Sinks ["📡 Pluggable sinks"]
         Kafka["Kafka protocol<br/>(Kafka, Redpanda, Kafka-compatible gateways)"]
-        NATS["NATS JetStream"]
-        Fluvio["Fluvio"]
-        Iceoryx["Eclipse iceoryx2<br/>(shared-memory IPC)"]
         Stdout["Terminal stdout<br/>(inspection)"]
     end
 
@@ -41,9 +38,6 @@ flowchart TD
     Profile --> Engine
     Reader --> TimeEngine --> Salter --> Pacer
     Pacer --> Kafka
-    Pacer --> NATS
-    Pacer --> Fluvio
-    Pacer --> Iceoryx
     Pacer --> Stdout
 ```
 
@@ -51,7 +45,7 @@ flowchart TD
 
 ## 📦 Requirements & Installation
 
-- **Rust compiler**: Rust 1.80+ (MSRV)
+- **Rust compiler**: Rust 1.85+ (MSRV)
 - **Pre-commit**: (optional, for local git hook enforcement) `pip install pre-commit && pre-commit install`
 - **Security tools**: `cargo install cargo-deny cargo-audit`
 
@@ -76,7 +70,7 @@ cargo install --git https://github.com/reidlai/stream-replay-rs
 4. **Timestamp rebasing**: historical timestamps in any supported unit or format are rebased onto the live clock (see [Timestamp rebasing and speed](#-timestamp-rebasing-and-speed)). With `--advance-loop-timestamps`, looping never moves time backward.
 5. **Speed or fixed rate**: `--speed <n>` rolls the dataset forward `n` times faster than its original spacing; `--rate <n>` emits a fixed number of events per second. The two are mutually exclusive.
 6. **Loop entity ID salting**: appends `_L1`, `_L2`, … to entity keys across loops so downstream stores do not see primary-key collisions.
-7. **Pluggable sinks**: Kafka protocol, NATS JetStream and Fluvio, selected with `--sink`. `stdout` and `iceoryx2` are also available.
+7. **Real Kafka sink**: publishes to any Kafka-protocol endpoint with a pure-Rust client (no C toolchain). A delivery failure ends the run with a non-zero exit code; nothing is simulated. `stdout` is available for inspection. See [Kafka sink](#-kafka-sink).
 8. **Progress bar**: elapsed time, events sent, live event rate and ETA.
 
 ---
@@ -148,17 +142,9 @@ cargo build --release
 ### 3. Publish to a broker
 
 ```bash
-# Kafka protocol (Kafka, Redpanda or a compatible gateway)
+# Kafka protocol (Kafka, Redpanda or a compatible gateway). The topic must already exist.
 ./target/release/stream-replay-rs --config profile.toml \
   --sink kafka --sink-url localhost:9092 --topic <topic>
-
-# NATS JetStream
-./target/release/stream-replay-rs --config profile.toml \
-  --sink nats --sink-url nats://localhost:4222 --topic <subject>
-
-# Fluvio
-./target/release/stream-replay-rs --config profile.toml \
-  --sink fluvio --sink-url localhost:9003 --topic <topic>
 ```
 
 ### 4. Fixed rate
@@ -185,7 +171,7 @@ Add `stream-replay-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-stream-replay-rs = { git = "https://github.com/reidlai/stream-replay-rs", features = ["full"] }
+stream-replay-rs = { git = "https://github.com/reidlai/stream-replay-rs" }
 tokio = { version = "1.40", features = ["full"] }
 ```
 
@@ -218,13 +204,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🏷️ Cargo Features
 
-| Feature | Description | Default |
-|---------|-------------|---------|
-| `kafka` | Kafka protocol sink driver | No |
-| `nats` | NATS JetStream publish driver | No |
-| `fluvio` | Fluvio streaming driver | No |
-| `iceoryx2` | Eclipse iceoryx2 zero-copy shared memory IPC driver | No |
-| `full` | Enables all sink drivers | No |
+There are no optional features. The Kafka sink is always built and uses a pure-Rust client, so `cargo install` needs no CMake, C compiler or OpenSSL.
+
+---
+
+## 📡 Kafka sink
+
+`--sink kafka --sink-url host:port --topic <topic>` publishes each replayed record to a Kafka-compatible endpoint. The delivery profile is fixed:
+
+| Setting | Value |
+|---------|-------|
+| Acknowledgement | `acks=all` (-1); a record counts as sent only after the endpoint confirms it |
+| Idempotence, transactions, compression | off |
+| Topic | must already exist; the replayer never creates topics |
+| Key | the `--key-column` value (with the `_L{n}` salt when looping) |
+| Partition | chosen by the replayer: murmur2 of the key modulo the partition count, the same mapping as the Java client and librdkafka's `murmur2_random`; records without a key go round-robin |
+| Ordering | one produce request in flight per partition, so order is kept per partition |
+| Timestamp | the rebased event time of the record |
+| Headers | `replay.run_id` (one per process), `replay.seq` (ordinal of the record in the run), `replay.loop` (loop number) |
+| Batching | 5 ms linger, up to 256 KiB per request |
+| Time limits | 5 s to connect, 30 s per produce request, 10 s of retries; then the run fails |
+
+**Client.** The sink uses [`rskafka`](https://crates.io/crates/rskafka) 0.6 (pure Rust). `rdkafka` was the alternative: it supports idempotence and a delivery callback, but it wraps the C library librdkafka, which needs CMake and a C compiler (it does not build on Windows with default features), so `cargo install` would no longer work with a plain Rust toolchain. `rskafka` sends only ApiVersions, Metadata and Produce, which keeps the endpoint's job small. Its limits (no idempotence, no request timeout, retries forever by default, topic auto-creation always requested) are handled in the sink or by the endpoint: keep topic auto-creation off.
+
+**Failure.** If the endpoint is unreachable, the topic is missing, a produce is rejected, or a request times out, the run stops and the process exits with a non-zero code. A timeout is reported as "may or may not have been written".
+
+**Duplicates.** Delivery is at-least-once. If an answer is lost after a record was written, the retry stores it again under a new offset. Offsets cannot reveal this, but `replay.run_id` and `replay.seq` identify every record, so a consumer can count distinct records.
+
+**Tests.** The test suite runs the sink against an in-process fake broker that speaks the real wire protocol. To run the same checks against a real endpoint, create an empty topic and run `KAFKA_TEST_ENDPOINT=host:port KAFKA_TEST_TOPIC=name cargo test -- --ignored`.
 
 ---
 
@@ -237,10 +244,9 @@ Every setting is also available as a key in the profile file. A CLI flag overrid
 | `--config <PATH>` | `-c` | none | Path to a profile TOML file |
 | `--input-file-path <PATH>` | `-i` | none | Path to the Parquet, CSV or JSONL dataset |
 | `--input-file-format <FMT>` | `-f` | auto | `parquet`, `csv` or `jsonl` |
-| `--sink <SINK>` | `-s` | `stdout` | `kafka`, `nats`, `fluvio`, `iceoryx2` or `stdout` |
-| `--sink-url <URL>` | `-u` | `localhost:9092` | Broker connection URL |
-| `--topic <TOPIC>` | `-t` | `events` | Target topic, subject or channel |
-| `--service-name <NAME>` | | `stream_replay_events` | iceoryx2 service name |
+| `--sink <SINK>` | `-s` | `stdout` | `kafka` or `stdout` |
+| `--sink-url <HOST:PORT>` | `-u` | `localhost:9092` | Kafka-compatible endpoint |
+| `--topic <TOPIC>` | `-t` | `events` | Target topic; it must already exist |
 | `--speed <n>` | | `1.0` | Rolls the dataset forward `n` times faster than its original spacing (gaps shrink to `Δt / n`). Accepts `10`, `10x` or `max` (no pacing). Values below 1 slow it down. |
 | `--rate <N>` | `-r` | none | Fixed events per second, ignoring the dataset's own spacing. Mutually exclusive with `--speed`. |
 | `--timestamp-column <COL>` | | auto-detect | The pacing column that drives the emit schedule |
@@ -282,7 +288,7 @@ loop_id_salt = true
 [sink]
 default_type = "kafka"
 default_url = "localhost:9092"
-destination = "<topic-or-subject>"
+destination = "<topic>"
 ```
 
 Run it:

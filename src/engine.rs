@@ -1,7 +1,7 @@
 use crate::config::ReplayConfig;
 use crate::error::ReplayError;
 use crate::reader::{create_reader_with_unit, detect_timestamp_column, RecordReader};
-use crate::sink::{create_sink, Sink, SinkType};
+use crate::sink::{create_sink, Sink, SinkRecord, SinkType};
 use crate::time_shift::{render_like, shift_value, TimeShiftEngine};
 use chrono::Utc;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -10,6 +10,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::time::sleep;
 use tracing::{info, warn};
+
+/// A process-unique id for this run: start time in nanoseconds plus the process id.
+fn new_run_id() -> String {
+    let nanos = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    format!("{:x}-{:x}", nanos, std::process::id())
+}
 
 pub struct ReplayStats {
     pub total_records: u64,
@@ -122,12 +128,10 @@ impl ReplayEngine {
         };
 
         let topic = match &self.config.sink {
-            SinkType::Kafka { topic, .. }
-            | SinkType::Nats { topic, .. }
-            | SinkType::Fluvio { topic, .. }
-            | SinkType::Stdout { topic } => topic.clone(),
-            SinkType::Iceoryx2 { service_name } => service_name.clone(),
+            SinkType::Kafka { topic, .. } | SinkType::Stdout { topic } => topic.clone(),
         };
+        // Identifies this process so that a duplicate caused by a retry can be recognised.
+        let run_id = new_run_id();
 
         // Anchor the replay to the live clock: T_start = now(). The same moment starts the
         // wall-clock schedule, so event time and wall-clock time agree under `compress`.
@@ -222,15 +226,25 @@ impl ReplayEngine {
 
                 let payload_bytes = serde_json::to_vec(&record.payload)?;
 
-                // Dispatch to active sink
+                // Dispatch to active sink. The headers give each record a stable identity
+                // (run, ordinal, loop) so a retry duplicate can be found downstream.
+                let sink_record = SinkRecord {
+                    key: record.key.as_deref(),
+                    payload: &payload_bytes,
+                    timestamp: emitted_time,
+                    headers: vec![
+                        ("replay.run_id".to_string(), run_id.clone()),
+                        ("replay.seq".to_string(), total_records.to_string()),
+                        (
+                            "replay.loop".to_string(),
+                            self.time_engine.loop_count.to_string(),
+                        ),
+                    ],
+                };
                 if let Some(ref custom) = self.custom_sink {
-                    custom
-                        .send(&topic, record.key.as_deref(), &payload_bytes)
-                        .await?;
+                    custom.send_record(&topic, &sink_record).await?;
                 } else {
-                    self.sink
-                        .send(&topic, record.key.as_deref(), &payload_bytes)
-                        .await?;
+                    self.sink.send_record(&topic, &sink_record).await?;
                 }
 
                 total_records += 1;

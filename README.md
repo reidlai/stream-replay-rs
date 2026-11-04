@@ -253,7 +253,7 @@ Every setting is also available as a key in the profile file. A CLI flag overrid
 | `--progress` | | on | Show the progress bar |
 
 > [!NOTE]
-> **Transition status.** The code does not yet match every row above. `--speed` still defaults to `10x`, `--event-time`, `--timestamp-unit` and `--shift-column` are not implemented, `--speed` and `--rate` are not yet enforced as mutually exclusive, and the CLI still carries `--burst` and Kanidm authentication flags (`--auth-url`, `--svc-account`, `--svc-secret`, `--svc-token`) that this README does not document because the replayer is not tied to any identity provider. The repository also still bundles a sample dataset and a dev broker compose file that are not part of the generic tool. These are tracked in the replayer rework and in the crates.io publication story.
+> **Transition status.** The code does not yet match every row above. `--speed` still defaults to `10x`, `--event-time`, `--timestamp-unit` and `--shift-column` are not implemented, `--speed` and `--rate` are not yet enforced as mutually exclusive, and the CLI still carries `--burst` and identity-provider authentication flags (`--auth-url`, `--svc-account`, `--svc-secret`, `--svc-token`) that this README does not document because the replayer is not tied to any identity provider. The repository also still bundles a sample dataset and a dev broker compose file that are not part of the generic tool. These are tracked in the replayer rework and in the crates.io publication story.
 
 ---
 

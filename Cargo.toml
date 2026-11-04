@@ -2,7 +2,8 @@
 name = "stream-replay-rs"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.85"
+resolver = "3"
 authors = ["stream-replay-rs contributors"]
 description = "Generic event replayer: turns a CSV, Parquet or JSONL dataset into a live stream by rebasing timestamps onto the live clock and pacing by speed or fixed rate"
 license = "MIT OR Apache-2.0"
@@ -22,8 +23,9 @@ serde_json = "1.0"
 toml = "0.8"
 indicatif = "0.17"
 csv = "1.3"
-arrow = { version = "53.2", default-features = false }
-parquet = { version = "53.2", default-features = false, features = ["arrow"] }
+arrow = { version = "59.3.2", default-features = false }
+parquet = { version = "59.3.2", default-features = false, features = ["arrow"] }
+rskafka = { version = "0.6.0", default-features = false }
 async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -31,14 +33,9 @@ thiserror = "1.0"
 
 [dev-dependencies]
 tempfile = "3.12"
-
-[features]
-default = []
-kafka = []
-nats = []
-fluvio = []
-iceoryx2 = []
-full = ["kafka", "nats", "fluvio", "iceoryx2"]
+# Wire-level fake broker for the Kafka sink tests (no Docker needed)
+kafka-protocol = { version = "0.18", default-features = false, features = ["broker"] }
+bytes = "1"
 
 [[bin]]
 name = "stream-replay-rs"

@@ -20,6 +20,6 @@ advance_timestamps = true
 loop_id_salt = true
 
 [sink]
-default_type = "stdout"    # kafka | nats | fluvio | iceoryx2 | stdout
+default_type = "stdout"    # kafka | stdout
 default_url = "localhost:9092"
-destination = "events"     # topic, subject or channel
+destination = "events"     # topic (it must already exist for kafka)

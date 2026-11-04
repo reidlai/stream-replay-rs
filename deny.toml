@@ -6,7 +6,6 @@ yanked = "warn"
 unmaintained = "all"
 ignore = [
     "RUSTSEC-2025-0119", # number_prefix unmaintained transitive dependency
-    "RUSTSEC-2024-0436", # paste unmaintained transitive dependency
 ]
 
 [licenses]

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SINK_URL: &str = "localhost:9092";
 pub const DEFAULT_TOPIC: &str = "events";
-pub const DEFAULT_SERVICE_NAME: &str = "stream_replay_events";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -47,7 +46,6 @@ pub struct SinkSection {
     pub default_type: Option<String>,
     pub default_url: Option<String>,
     pub destination: Option<String>,
-    pub service_name: Option<String>,
 }
 
 /// `sink` is either a sink name (flat profile) or a `[sink]` table.
@@ -74,7 +72,6 @@ pub struct ProfileConfig {
     pub key_column: Option<String>,
     pub sink_url: Option<String>,
     pub topic: Option<String>,
-    pub service_name: Option<String>,
     pub speed: Option<SpeedSetting>,
     pub rate: Option<u64>,
     pub event_time: Option<EventTimeMode>,
@@ -145,53 +142,27 @@ pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
 }
 
 /// Build a [`SinkType`] from its parts (unused parts are ignored by the chosen sink).
-pub fn sink_from_parts(
-    kind: &str,
-    url: String,
-    topic: String,
-    service_name: String,
-) -> Result<SinkType, ReplayError> {
+pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkType, ReplayError> {
     match kind.to_lowercase().as_str() {
         "kafka" => Ok(SinkType::Kafka {
             broker_url: url,
             topic,
         }),
-        "nats" => Ok(SinkType::Nats { url, topic }),
-        "fluvio" => Ok(SinkType::Fluvio { url, topic }),
-        "iceoryx2" => Ok(SinkType::Iceoryx2 { service_name }),
         "stdout" => Ok(SinkType::Stdout { topic }),
         other => Err(ReplayError::Config(format!(
-            "Unknown sink '{other}'. Expected kafka, nats, fluvio, iceoryx2 or stdout."
+            "Unknown sink '{other}'. Expected kafka or stdout."
         ))),
     }
 }
 
-/// Split a [`SinkType`] into `(kind, url, topic, service_name)`, filling defaults.
-pub fn sink_parts(sink: &SinkType) -> (String, String, String, String) {
-    let url_default = DEFAULT_SINK_URL.to_string();
-    let topic_default = DEFAULT_TOPIC.to_string();
-    let service_default = DEFAULT_SERVICE_NAME.to_string();
+/// Split a [`SinkType`] into `(kind, url, topic)`, filling defaults.
+pub fn sink_parts(sink: &SinkType) -> (String, String, String) {
     match sink {
-        SinkType::Kafka { broker_url, topic } => (
-            "kafka".into(),
-            broker_url.clone(),
-            topic.clone(),
-            service_default,
-        ),
-        SinkType::Nats { url, topic } => {
-            ("nats".into(), url.clone(), topic.clone(), service_default)
+        SinkType::Kafka { broker_url, topic } => {
+            ("kafka".into(), broker_url.clone(), topic.clone())
         }
-        SinkType::Fluvio { url, topic } => {
-            ("fluvio".into(), url.clone(), topic.clone(), service_default)
-        }
-        SinkType::Iceoryx2 { service_name } => (
-            "iceoryx2".into(),
-            url_default,
-            topic_default,
-            service_name.clone(),
-        ),
         SinkType::Stdout { topic } => {
-            ("stdout".into(), url_default, topic.clone(), service_default)
+            ("stdout".into(), DEFAULT_SINK_URL.to_string(), topic.clone())
         }
     }
 }
@@ -390,10 +361,6 @@ impl ReplayConfig {
                 .destination
                 .or(profile.topic)
                 .unwrap_or_else(|| DEFAULT_TOPIC.to_string()),
-            sink_table
-                .service_name
-                .or(profile.service_name)
-                .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string()),
         )?;
 
         let speed_setting = replay.speed.or(profile.speed);

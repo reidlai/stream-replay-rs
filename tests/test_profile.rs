@@ -95,8 +95,8 @@ fn test_legacy_flat_profile_keys_and_ignored_unknown_keys() {
         tmp,
         r#"
 input_file_path = "events.csv"
-sink = "nats"
-sink_url = "nats://localhost:4222"
+sink = "kafka"
+sink_url = "broker:9092"
 topic = "subject"
 speed = "10x"
 loop_playback = true
@@ -108,11 +108,27 @@ loop_playback = true
     assert!(cfg.loop_playback);
     assert_eq!(
         cfg.sink,
-        SinkType::Nats {
-            url: "nats://localhost:4222".to_string(),
+        SinkType::Kafka {
+            broker_url: "broker:9092".to_string(),
             topic: "subject".to_string()
         }
     );
+}
+
+#[test]
+fn test_removed_sinks_are_rejected() {
+    for removed in ["nats", "fluvio", "iceoryx2"] {
+        let mut tmp = NamedTempFile::new().unwrap();
+        write!(
+            tmp,
+            "input_file_path = \"events.csv\"\nsink = \"{removed}\"\n"
+        )
+        .unwrap();
+        assert!(
+            ReplayConfig::from_profile_file(tmp.path()).is_err(),
+            "{removed} must not be accepted"
+        );
+    }
 }
 
 #[test]

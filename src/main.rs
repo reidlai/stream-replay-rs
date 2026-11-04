@@ -23,21 +23,17 @@ pub struct CliArgs {
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 
-    /// Target sink: 'kafka', 'nats', 'fluvio', 'iceoryx2', or 'stdout' [default: stdout]
+    /// Target sink: 'kafka' or 'stdout' [default: stdout]
     #[arg(short, long)]
     pub sink: Option<String>,
 
-    /// Target broker connection URL [default: localhost:9092]
+    /// Kafka-compatible endpoint, host:port [default: localhost:9092]
     #[arg(short = 'u', long)]
     pub sink_url: Option<String>,
 
-    /// Destination topic, subject or channel [default: events]
+    /// Destination topic; it must already exist [default: events]
     #[arg(short, long)]
     pub topic: Option<String>,
-
-    /// Target iceoryx2 service name (when --sink iceoryx2) [default: stream_replay_events]
-    #[arg(long)]
-    pub service_name: Option<String>,
 
     /// Roll the dataset forward N times faster than its original spacing
     /// (1, 2.5, 10x, or max for no pacing) [default: 1.0]
@@ -118,17 +114,12 @@ pub fn build_config(args: CliArgs) -> Result<ReplayConfig, ReplayError> {
         cfg.input_file_format = Some(f);
     }
 
-    if args.sink.is_some()
-        || args.sink_url.is_some()
-        || args.topic.is_some()
-        || args.service_name.is_some()
-    {
-        let (kind, url, topic, service_name) = sink_parts(&cfg.sink);
+    if args.sink.is_some() || args.sink_url.is_some() || args.topic.is_some() {
+        let (kind, url, topic) = sink_parts(&cfg.sink);
         cfg.sink = sink_from_parts(
             &args.sink.unwrap_or(kind),
             args.sink_url.unwrap_or(url),
             args.topic.unwrap_or(topic),
-            args.service_name.unwrap_or(service_name),
         )?;
     }
 

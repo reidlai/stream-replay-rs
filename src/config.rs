@@ -1,8 +1,13 @@
 use crate::error::ReplayError;
 use crate::sink::SinkType;
+use crate::time_shift::{EventTimeMode, TimestampUnit};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+pub const DEFAULT_SINK_URL: &str = "localhost:9092";
+pub const DEFAULT_TOPIC: &str = "events";
+pub const DEFAULT_SERVICE_NAME: &str = "stream_replay_events";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -11,26 +16,72 @@ pub enum SpeedSetting {
     Preset(String),
 }
 
+/// `[dataset]` table of a replay profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DatasetSection {
+    pub input_path: Option<String>,
+    pub format: Option<String>,
+    pub timestamp_column: Option<String>,
+    pub timestamp_unit: Option<TimestampUnit>,
+    pub shift_columns: Option<Vec<String>>,
+    pub partition_key: Option<String>,
+}
+
+/// `[replay]` table of a replay profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReplaySection {
+    pub speed: Option<SpeedSetting>,
+    pub rate: Option<u64>,
+    pub event_time: Option<EventTimeMode>,
+    pub shift_timestamps: Option<bool>,
+    #[serde(rename = "loop", alias = "loop_playback")]
+    pub loop_playback: Option<bool>,
+    #[serde(alias = "advance_loop_timestamps")]
+    pub advance_timestamps: Option<bool>,
+    pub loop_id_salt: Option<bool>,
+}
+
+/// `[sink]` table of a replay profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SinkSection {
+    pub default_type: Option<String>,
+    pub default_url: Option<String>,
+    pub destination: Option<String>,
+    pub service_name: Option<String>,
+}
+
+/// `sink` is either a sink name (flat profile) or a `[sink]` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SinkSetting {
+    Name(String),
+    Table(SinkSection),
+}
+
+/// A replay profile. Settings may be written in `[dataset]`, `[replay]` and `[sink]`
+/// tables, or as flat top-level keys; a table value wins over the flat key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileConfig {
-    pub input_file_path: String,
+    pub dataset: Option<DatasetSection>,
+    pub replay: Option<ReplaySection>,
+    pub sink: Option<SinkSetting>,
+
+    pub input_file_path: Option<String>,
     pub input_file_format: Option<String>,
     pub timestamp_column: Option<String>,
+    pub timestamp_unit: Option<TimestampUnit>,
+    pub shift_columns: Option<Vec<String>>,
     pub key_column: Option<String>,
-    pub sink: Option<String>,
     pub sink_url: Option<String>,
     pub topic: Option<String>,
     pub service_name: Option<String>,
     pub speed: Option<SpeedSetting>,
     pub rate: Option<u64>,
+    pub event_time: Option<EventTimeMode>,
     pub shift_timestamps: Option<bool>,
     pub loop_playback: Option<bool>,
     pub advance_loop_timestamps: Option<bool>,
     pub loop_id_salt: Option<bool>,
-    pub auth_url: Option<String>,
-    pub service_account: Option<String>,
-    pub service_secret: Option<String>,
-    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,20 +89,25 @@ pub struct ReplayConfig {
     pub input_file_path: PathBuf,
     pub input_file_format: Option<String>,
     pub sink: SinkType,
+    /// Speed multiplier `s`: 1.0 keeps the original spacing, 10.0 is ten times faster,
+    /// 0.0 is unthrottled. Ignored when `rate` is set.
     pub speed_multiplier: f64,
+    /// Fixed events per second, ignoring the dataset's own spacing.
     pub rate: Option<u64>,
     pub shift_timestamps: bool,
-    pub timestamp_column: String,
+    /// Pacing column; `None` auto-detects it.
+    pub timestamp_column: Option<String>,
+    pub timestamp_unit: TimestampUnit,
+    /// Extra timestamp columns rebased by the same offset as the pacing column.
+    pub shift_columns: Vec<String>,
+    pub event_time: EventTimeMode,
     pub key_column: Option<String>,
     pub loop_playback: bool,
     pub advance_loop_timestamps: bool,
     pub loop_id_salt: bool,
     pub progress: bool,
-    pub burst: Option<usize>,
-    pub auth_url: Option<String>,
-    pub service_account: Option<String>,
-    pub service_secret: Option<String>,
-    pub auth_token: Option<String>,
+    /// Stop after emitting this many records (library use; there is no CLI flag).
+    pub max_records: Option<u64>,
 }
 
 pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
@@ -81,9 +137,61 @@ pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
                     }
                 }
                 Err(_) => Err(ReplayError::Config(format!(
-                    "Invalid speed multiplier or preset: '{val}'. Expected 1x, 10x, 50x, max, or positive number."
+                    "Invalid speed multiplier or preset: '{val}'. Expected a positive number such as 1, 2.5 or 10x, or 'max'."
                 ))),
             }
+        }
+    }
+}
+
+/// Build a [`SinkType`] from its parts (unused parts are ignored by the chosen sink).
+pub fn sink_from_parts(
+    kind: &str,
+    url: String,
+    topic: String,
+    service_name: String,
+) -> Result<SinkType, ReplayError> {
+    match kind.to_lowercase().as_str() {
+        "kafka" => Ok(SinkType::Kafka {
+            broker_url: url,
+            topic,
+        }),
+        "nats" => Ok(SinkType::Nats { url, topic }),
+        "fluvio" => Ok(SinkType::Fluvio { url, topic }),
+        "iceoryx2" => Ok(SinkType::Iceoryx2 { service_name }),
+        "stdout" => Ok(SinkType::Stdout { topic }),
+        other => Err(ReplayError::Config(format!(
+            "Unknown sink '{other}'. Expected kafka, nats, fluvio, iceoryx2 or stdout."
+        ))),
+    }
+}
+
+/// Split a [`SinkType`] into `(kind, url, topic, service_name)`, filling defaults.
+pub fn sink_parts(sink: &SinkType) -> (String, String, String, String) {
+    let url_default = DEFAULT_SINK_URL.to_string();
+    let topic_default = DEFAULT_TOPIC.to_string();
+    let service_default = DEFAULT_SERVICE_NAME.to_string();
+    match sink {
+        SinkType::Kafka { broker_url, topic } => (
+            "kafka".into(),
+            broker_url.clone(),
+            topic.clone(),
+            service_default,
+        ),
+        SinkType::Nats { url, topic } => {
+            ("nats".into(), url.clone(), topic.clone(), service_default)
+        }
+        SinkType::Fluvio { url, topic } => {
+            ("fluvio".into(), url.clone(), topic.clone(), service_default)
+        }
+        SinkType::Iceoryx2 { service_name } => (
+            "iceoryx2".into(),
+            url_default,
+            topic_default,
+            service_name.clone(),
+        ),
+        SinkType::Stdout { topic } => {
+            ("stdout".into(), url_default, topic.clone(), service_default)
         }
     }
 }
@@ -94,34 +202,35 @@ impl Default for ReplayConfig {
             input_file_path: PathBuf::new(),
             input_file_format: None,
             sink: SinkType::Stdout {
-                topic: "events".to_string(),
+                topic: DEFAULT_TOPIC.to_string(),
             },
-            speed_multiplier: 10.0,
+            speed_multiplier: 1.0,
             rate: None,
             shift_timestamps: true,
-            timestamp_column: "timestamp".to_string(),
+            timestamp_column: None,
+            timestamp_unit: TimestampUnit::Auto,
+            shift_columns: Vec::new(),
+            event_time: EventTimeMode::Compress,
             key_column: None,
             loop_playback: false,
             advance_loop_timestamps: false,
             loop_id_salt: false,
             progress: true,
-            burst: None,
-            auth_url: None,
-            service_account: None,
-            service_secret: None,
-            auth_token: None,
+            max_records: None,
         }
     }
 }
 
 pub struct ReplayConfigBuilder {
     config: ReplayConfig,
+    speed_set: bool,
 }
 
 impl ReplayConfigBuilder {
     pub fn new() -> Self {
         Self {
             config: ReplayConfig::default(),
+            speed_set: false,
         }
     }
 
@@ -142,6 +251,7 @@ impl ReplayConfigBuilder {
 
     pub fn speed_multiplier(mut self, speed: f64) -> Self {
         self.config.speed_multiplier = speed;
+        self.speed_set = true;
         self
     }
 
@@ -156,7 +266,22 @@ impl ReplayConfigBuilder {
     }
 
     pub fn timestamp_column(mut self, col: impl Into<String>) -> Self {
-        self.config.timestamp_column = col.into();
+        self.config.timestamp_column = Some(col.into());
+        self
+    }
+
+    pub fn timestamp_unit(mut self, unit: TimestampUnit) -> Self {
+        self.config.timestamp_unit = unit;
+        self
+    }
+
+    pub fn shift_column(mut self, col: impl Into<String>) -> Self {
+        self.config.shift_columns.push(col.into());
+        self
+    }
+
+    pub fn event_time(mut self, mode: EventTimeMode) -> Self {
+        self.config.event_time = mode;
         self
     }
 
@@ -185,31 +310,18 @@ impl ReplayConfigBuilder {
         self
     }
 
-    pub fn burst(mut self, burst: usize) -> Self {
-        self.config.burst = Some(burst);
-        self
-    }
-
-    pub fn auth(
-        mut self,
-        url: Option<String>,
-        account: Option<String>,
-        secret: Option<String>,
-        token: Option<String>,
-    ) -> Self {
-        self.config.auth_url = url;
-        self.config.service_account = account;
-        self.config.service_secret = secret;
-        self.config.auth_token = token;
+    pub fn max_records(mut self, max_records: u64) -> Self {
+        self.config.max_records = Some(max_records);
         self
     }
 
     pub fn build(self) -> Result<ReplayConfig, ReplayError> {
-        if self.config.input_file_path.as_os_str().is_empty() {
+        if self.speed_set && self.config.rate.is_some() {
             return Err(ReplayError::Config(
-                "Input file path must not be empty".to_string(),
+                "speed and rate are mutually exclusive".to_string(),
             ));
         }
+        self.config.validate()?;
         Ok(self.config)
     }
 }
@@ -225,69 +337,125 @@ impl ReplayConfig {
         ReplayConfigBuilder::new()
     }
 
+    /// Check the settings that do not depend on the dataset contents.
+    pub fn validate(&self) -> Result<(), ReplayError> {
+        if self.input_file_path.as_os_str().is_empty() {
+            return Err(ReplayError::Config(
+                "Input file path must not be empty".to_string(),
+            ));
+        }
+        if self.rate == Some(0) {
+            return Err(ReplayError::Config(
+                "rate must be at least 1 event per second".to_string(),
+            ));
+        }
+        if !self.speed_multiplier.is_finite() || self.speed_multiplier < 0.0 {
+            return Err(ReplayError::Config(format!(
+                "Invalid speed multiplier: {}",
+                self.speed_multiplier
+            )));
+        }
+        Ok(())
+    }
+
     pub fn from_profile_file(path: &Path) -> Result<Self, ReplayError> {
         let content = fs::read_to_string(path)?;
         let profile: ProfileConfig = toml::from_str(&content)
             .map_err(|e| ReplayError::Config(format!("Failed to parse profile TOML: {e}")))?;
+        Self::from_profile(profile)
+    }
 
-        let topic = profile.topic.unwrap_or_else(|| "events".to_string());
-        let sink_type_str = profile.sink.unwrap_or_else(|| "kafka".to_string());
-        let sink_url = profile
-            .sink_url
-            .unwrap_or_else(|| "localhost:9092".to_string());
-        let service_name = profile
-            .service_name
-            .unwrap_or_else(|| "stream_replay_events".to_string());
-
-        let sink = match sink_type_str.to_lowercase().as_str() {
-            "kafka" => SinkType::Kafka {
-                broker_url: sink_url,
-                topic,
-            },
-            "nats" => SinkType::Nats {
-                url: sink_url,
-                topic,
-            },
-            "fluvio" => SinkType::Fluvio {
-                url: sink_url,
-                topic,
-            },
-            "iceoryx2" => SinkType::Iceoryx2 { service_name },
-            _ => SinkType::Stdout { topic },
+    /// Resolve a parsed profile into a config. The input path may be left empty so
+    /// that a command-line flag can supply it; call [`ReplayConfig::validate`] after.
+    pub fn from_profile(profile: ProfileConfig) -> Result<Self, ReplayError> {
+        let dataset = profile.dataset.unwrap_or_default();
+        let replay = profile.replay.unwrap_or_default();
+        let (sink_name, sink_table) = match profile.sink {
+            Some(SinkSetting::Name(name)) => (Some(name), SinkSection::default()),
+            Some(SinkSetting::Table(table)) => (None, table),
+            None => (None, SinkSection::default()),
         };
 
-        let speed_multiplier = match profile.speed {
+        let sink_kind = sink_table
+            .default_type
+            .or(sink_name)
+            .unwrap_or_else(|| "stdout".to_string());
+        let sink = sink_from_parts(
+            &sink_kind,
+            sink_table
+                .default_url
+                .or(profile.sink_url)
+                .unwrap_or_else(|| DEFAULT_SINK_URL.to_string()),
+            sink_table
+                .destination
+                .or(profile.topic)
+                .unwrap_or_else(|| DEFAULT_TOPIC.to_string()),
+            sink_table
+                .service_name
+                .or(profile.service_name)
+                .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string()),
+        )?;
+
+        let speed_setting = replay.speed.or(profile.speed);
+        let rate = replay.rate.or(profile.rate);
+        if speed_setting.is_some() && rate.is_some() {
+            return Err(ReplayError::Config(
+                "speed and rate are mutually exclusive; set only one in the profile".to_string(),
+            ));
+        }
+        let speed_multiplier = match speed_setting {
             Some(SpeedSetting::Number(num)) => {
-                if num <= 0.0 {
-                    0.0
-                } else {
-                    num
+                if !num.is_finite() {
+                    return Err(ReplayError::Config(format!(
+                        "Invalid speed multiplier: {num}"
+                    )));
                 }
+                num.max(0.0)
             }
             Some(SpeedSetting::Preset(preset_str)) => parse_speed_preset(&preset_str)?,
-            None => 10.0,
+            None => 1.0,
         };
 
         Ok(Self {
-            input_file_path: PathBuf::from(profile.input_file_path),
-            input_file_format: profile.input_file_format,
+            input_file_path: PathBuf::from(
+                dataset
+                    .input_path
+                    .or(profile.input_file_path)
+                    .unwrap_or_default(),
+            ),
+            input_file_format: dataset.format.or(profile.input_file_format),
             sink,
             speed_multiplier,
-            rate: profile.rate,
-            shift_timestamps: profile.shift_timestamps.unwrap_or(true),
-            timestamp_column: profile
-                .timestamp_column
-                .unwrap_or_else(|| "timestamp".to_string()),
-            key_column: profile.key_column,
-            loop_playback: profile.loop_playback.unwrap_or(false),
-            advance_loop_timestamps: profile.advance_loop_timestamps.unwrap_or(false),
-            loop_id_salt: profile.loop_id_salt.unwrap_or(false),
+            rate,
+            shift_timestamps: replay
+                .shift_timestamps
+                .or(profile.shift_timestamps)
+                .unwrap_or(true),
+            timestamp_column: dataset.timestamp_column.or(profile.timestamp_column),
+            timestamp_unit: dataset
+                .timestamp_unit
+                .or(profile.timestamp_unit)
+                .unwrap_or_default(),
+            shift_columns: dataset
+                .shift_columns
+                .or(profile.shift_columns)
+                .unwrap_or_default(),
+            event_time: replay.event_time.or(profile.event_time).unwrap_or_default(),
+            key_column: dataset.partition_key.or(profile.key_column),
+            loop_playback: replay
+                .loop_playback
+                .or(profile.loop_playback)
+                .unwrap_or(false),
+            advance_loop_timestamps: replay
+                .advance_timestamps
+                .or(profile.advance_loop_timestamps)
+                .unwrap_or(false),
+            loop_id_salt: replay
+                .loop_id_salt
+                .or(profile.loop_id_salt)
+                .unwrap_or(false),
             progress: true,
-            burst: None,
-            auth_url: profile.auth_url,
-            service_account: profile.service_account,
-            service_secret: profile.service_secret,
-            auth_token: profile.auth_token,
+            max_records: None,
         })
     }
 }

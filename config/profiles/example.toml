@@ -1,0 +1,25 @@
+# Generic example replay profile for stream-replay-rs.
+# Copy it next to your dataset, edit the placeholders and run:
+#   stream-replay-rs --config my-profile.toml
+# Command-line flags override the values below.
+
+[dataset]
+input_path = "./data/events.parquet"
+format = "parquet"                      # parquet | csv | jsonl
+timestamp_column = "event_time"         # the pacing column; omit to auto-detect
+timestamp_unit = "auto"                 # auto | s | ms | us | ns | rfc3339
+shift_columns = ["processed_time"]      # other timestamp columns rebased by the same offset
+partition_key = "event_id"              # entity ID / key column
+
+[replay]
+speed = 1.0                # 1.0 = original spacing; 10.0 = ten times faster
+# rate = 25                # fixed events per second instead of speed (mutually exclusive)
+event_time = "compress"    # compress | preserve
+loop = true
+advance_timestamps = true
+loop_id_salt = true
+
+[sink]
+default_type = "stdout"    # kafka | nats | fluvio | iceoryx2 | stdout
+default_url = "localhost:9092"
+destination = "events"     # topic, subject or channel

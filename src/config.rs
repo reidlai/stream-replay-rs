@@ -144,13 +144,13 @@ pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
 /// Build a [`SinkType`] from its parts (unused parts are ignored by the chosen sink).
 pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkType, ReplayError> {
     match kind.to_lowercase().as_str() {
-        "kafka" => Ok(SinkType::Kafka {
+        "kafka" | "iggy" => Ok(SinkType::Kafka {
             broker_url: url,
             topic,
         }),
         "stdout" => Ok(SinkType::Stdout { topic }),
         other => Err(ReplayError::Config(format!(
-            "Unknown sink '{other}'. Expected kafka or stdout."
+            "Unknown sink '{other}'. Expected kafka, iggy or stdout."
         ))),
     }
 }

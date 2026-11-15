@@ -70,6 +70,33 @@ destination = "replayed"
 }
 
 #[test]
+fn test_sectioned_profile_with_iggy_sink() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    write!(
+        tmp,
+        r#"
+[dataset]
+input_path = "events.csv"
+
+[sink]
+default_type = "iggy"
+default_url = "localhost:9092"
+destination = "replayed"
+"#
+    )
+    .unwrap();
+
+    let cfg = ReplayConfig::from_profile_file(tmp.path()).unwrap();
+    assert_eq!(
+        cfg.sink,
+        SinkType::Kafka {
+            broker_url: "localhost:9092".to_string(),
+            topic: "replayed".to_string()
+        }
+    );
+}
+
+#[test]
 fn test_sectioned_speed_and_rate_conflict() {
     let mut tmp = NamedTempFile::new().unwrap();
     write!(
@@ -111,6 +138,29 @@ loop_playback = true
         SinkType::Kafka {
             broker_url: "broker:9092".to_string(),
             topic: "subject".to_string()
+        }
+    );
+}
+
+#[test]
+fn test_flat_profile_with_iggy_sink() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    write!(
+        tmp,
+        r#"
+input_file_path = "events.csv"
+sink = "iggy"
+sink_url = "iggy-broker:9092"
+topic = "stream-topic"
+"#
+    )
+    .unwrap();
+    let cfg = ReplayConfig::from_profile_file(tmp.path()).unwrap();
+    assert_eq!(
+        cfg.sink,
+        SinkType::Kafka {
+            broker_url: "iggy-broker:9092".to_string(),
+            topic: "stream-topic".to_string()
         }
     );
 }

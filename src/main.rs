@@ -23,11 +23,11 @@ pub struct CliArgs {
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 
-    /// Target sink: 'kafka' (Apache Iggy / Kafka) or 'stdout' [default: stdout]
+    /// Target sink: 'iggy' (Apache Iggy), 'kafka' (Apache Kafka / Redpanda), or 'stdout' [default: stdout]
     #[arg(short, long)]
     pub sink: Option<String>,
 
-    /// Apache Iggy / Kafka-compatible endpoint, host:port [default: localhost:9092]
+    /// Apache Iggy / Kafka / Redpanda endpoint, host:port [default: localhost:9092]
     #[arg(short = 'u', long)]
     pub sink_url: Option<String>,
 
@@ -329,6 +329,29 @@ mod tests {
             SinkType::Kafka {
                 broker_url: "broker:9092".to_string(),
                 topic: "t".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn sink_flag_supports_iggy_alias() {
+        let cfg = build_config(
+            parse(&[
+                "--sink",
+                "iggy",
+                "--sink-url",
+                "localhost:9092",
+                "--topic",
+                "events",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Kafka {
+                broker_url: "localhost:9092".to_string(),
+                topic: "events".to_string()
             }
         );
     }

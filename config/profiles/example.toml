@@ -20,6 +20,15 @@ advance_timestamps = true
 loop_id_salt = true
 
 [sink]
-default_type = "stdout"    # kafka | stdout
+default_type = "stdout"    # iggy | kafka | stdout
 default_url = "localhost:9092"
-destination = "events"     # topic (it must already exist for kafka)
+destination = "events"     # topic (it must already exist for iggy / kafka)
+# For Apache Iggy (via wire-protocol bridge on port 9092):
+# default_type = "iggy"
+# default_url = "localhost:9092"
+# destination = "events"
+#
+# For Apache Kafka / Redpanda:
+# default_type = "kafka"
+# default_url = "localhost:9092"
+# destination = "events"

@@ -1,7 +1,7 @@
 # stream-replay-rs
 
 > **Generic, high-throughput event replayer in pure Rust**  
-> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Apache Iggy (via wire-protocol bridge) or Kafka-compatible endpoints.
+> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Apache Iggy (via wire-protocol bridge), Apache Kafka / Redpanda endpoints, or stdout.
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#-license)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#-requirements--installation)
@@ -30,14 +30,16 @@ flowchart TD
     end
 
     subgraph Sinks ["📡 Pluggable sinks"]
-        Iggy["Apache Iggy<br/>(via Iggy-Kafka bridge or wire protocol)"]
-        Stdout["Terminal stdout<br/>(inspection)"]
+        Iggy["Apache Iggy<br/>(Port 9092 via wire bridge)"]
+        Kafka["Apache Kafka / Redpanda<br/>(via Kafka wire protocol)"]
+        Stdout["Terminal stdout<br/>(inspection / dry-run)"]
     end
 
     Dataset --> Reader
     Profile --> Engine
     Reader --> TimeEngine --> Salter --> Pacer
     Pacer --> Iggy
+    Pacer --> Kafka
     Pacer --> Stdout
 ```
 
@@ -70,7 +72,7 @@ cargo install --git https://github.com/reidlai/stream-replay-rs
 4. **Timestamp rebasing**: historical timestamps in any supported unit or format are rebased onto the live clock (see [Timestamp rebasing and speed](#-timestamp-rebasing-and-speed)). With `--advance-loop-timestamps`, looping never moves time backward.
 5. **Speed or fixed rate**: `--speed <n>` rolls the dataset forward `n` times faster than its original spacing; `--rate <n>` emits a fixed number of events per second. The two are mutually exclusive.
 6. **Loop entity ID salting**: appends `_L1`, `_L2`, … to entity keys across loops so downstream stores do not see primary-key collisions.
-7. **Real Apache Iggy sink**: publishes to Apache Iggy (via zero-copy wire-protocol bridge) or any Kafka-compatible endpoint with a pure-Rust client (no C toolchain). A delivery failure ends the run with a non-zero exit code; nothing is simulated. `stdout` is available for inspection. See [Apache Iggy sink](#-apache-iggy-sink).
+7. **Pluggable sinks**: publishes to Apache Iggy (via wire-protocol bridge on port 9092), native Apache Kafka / Redpanda endpoints (pure-Rust wire protocol client, no C toolchain), or terminal `stdout` for inspection and dry-run. A delivery failure ends the run with a non-zero exit code; nothing is simulated. See [Pluggable Sinks](#-pluggable-sinks).
 8. **Progress bar**: elapsed time, events sent, live event rate and ETA.
 
 ---
@@ -127,7 +129,7 @@ Epoch seconds, milliseconds, microseconds and nanoseconds, and RFC 3339 are auto
 cargo build --release
 ```
 
-### 2. Inspect a replay in the terminal (no broker)
+### 2. Inspect a replay in the terminal (`stdout`)
 
 ```bash
 ./target/release/stream-replay-rs \
@@ -139,22 +141,30 @@ cargo build --release
   --progress
 ```
 
-### 3. Publish to a broker
+### 3. Publish to Apache Iggy (`iggy`)
 
 ```bash
 # Apache Iggy streaming broker (via wire-protocol bridge on localhost:9092). The topic must already exist.
-./target/release/stream-replay-rs --config profile.toml \
+./target/release/stream-replay-rs --config config/profiles/example.toml \
+  --sink iggy --sink-url localhost:9092 --topic <topic>
+```
+
+### 4. Publish to Apache Kafka / Redpanda (`kafka`)
+
+```bash
+# Apache Kafka or Redpanda endpoint. The topic must already exist.
+./target/release/stream-replay-rs --config config/profiles/example.toml \
   --sink kafka --sink-url localhost:9092 --topic <topic>
 ```
 
-### 4. Fixed rate
+### 5. Fixed rate
 
 ```bash
 # Emit 25 events per second regardless of the dataset's own spacing
-./target/release/stream-replay-rs --config profile.toml --rate 25
+./target/release/stream-replay-rs --config config/profiles/example.toml --rate 25
 ```
 
-### 5. Continuous looping with ID salting
+### 6. Continuous looping with ID salting
 
 ```bash
 ./target/release/stream-replay-rs \
@@ -204,13 +214,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🏷️ Cargo Features
 
-There are no optional features. The Apache Iggy / Kafka sink is always built and uses a pure-Rust client, so `cargo install` needs no CMake, C compiler or OpenSSL.
+There are no optional features. All pluggable sinks (`iggy`, `kafka`, `stdout`) are always built. The network sinks use a pure-Rust client (`rskafka`), so `cargo install` needs no CMake, C compiler or OpenSSL.
 
 ---
 
-## 📡 Apache Iggy sink
+## 📡 Pluggable Sinks
 
-`--sink kafka --sink-url host:port --topic <topic>` publishes each replayed record to Apache Iggy (via wire-protocol bridge on `localhost:9092`) or a Kafka-compatible endpoint. The delivery profile is fixed:
+`stream-replay-rs` provides three pluggable sinks for replaying event streams: `iggy`, `kafka`, and `stdout`.
+
+| Sink | Target Endpoint | Wire Protocol | Usage & Semantics |
+|------|-----------------|---------------|-------------------|
+| `iggy` | Apache Iggy streaming broker (`localhost:9092`) | Kafka wire protocol via Iggy wire bridge | High-throughput streaming broker replay; keyed partitioning, at-least-once delivery |
+| `kafka` | Apache Kafka, Redpanda, or wire-compatible brokers | Native Kafka wire protocol | Distributed streaming replay; keyed partitioning, at-least-once delivery |
+| `stdout` | Terminal / Standard output | None (formatted text/payload) | Local inspection, dry runs, smoke testing, and pipeline chaining without broker dependencies |
+
+### Supported Sinks
+
+#### 1. Apache Iggy (`--sink iggy`)
+- **Configuration**: `--sink iggy --sink-url <host:port> --topic <topic>` or `default_type = "iggy"` in profile.
+- **Wire Protocol**: Kafka wire protocol (port 9092) via the Apache Iggy wire bridge.
+- **Connection Semantics**: Pure-Rust client (`rskafka`), direct TCP connection, `acks=all` (-1). Delivery is at-least-once with deterministic murmur2 partition routing by key, custom replay tracking headers, and rebased event timestamps.
+- **Endpoints**: Apache Iggy streaming broker running with wire bridge (default: `localhost:9092`).
+
+#### 2. Apache Kafka / Redpanda (`--sink kafka`)
+- **Configuration**: `--sink kafka --sink-url <host:port> --topic <topic>` or `default_type = "kafka"` in profile.
+- **Wire Protocol**: Native Apache Kafka wire protocol (ApiVersions, Metadata, Produce v3+).
+- **Connection Semantics**: Pure-Rust client (`rskafka`), direct TCP connection, `acks=all` (-1). Delivery is at-least-once with deterministic murmur2 partition routing by key, custom replay tracking headers, and rebased event timestamps.
+- **Endpoints**: Apache Kafka clusters, Redpanda brokers, or any wire-compatible event streaming endpoint (default: `localhost:9092`).
+
+#### 3. Terminal stdout (`--sink stdout`)
+- **Configuration**: `--sink stdout` (the default) or `default_type = "stdout"` in profile.
+- **Wire Protocol**: None (emits structured event lines to stdout).
+- **Connection Semantics**: Zero network activity, bounded memory footprint, and zero broker dependencies. Formatted events are written to terminal standard output, ideal for local inspection, dry runs, smoke testing, or piping into command-line utilities.
+- **Endpoints**: Standard output stream.
+
+### Delivery Profile (Network Sinks)
+
+The delivery profile for network sinks (`iggy` and `kafka`) is fixed:
 
 | Setting | Value |
 |---------|-------|
@@ -225,13 +265,13 @@ There are no optional features. The Apache Iggy / Kafka sink is always built and
 | Batching | 5 ms linger, up to 256 KiB per request |
 | Time limits | 5 s to connect, 30 s per produce request, 10 s of retries; then the run fails |
 
-**Client.** The sink targets Apache Iggy via its high-performance wire protocol bridge and uses [`rskafka`](https://crates.io/crates/rskafka) 0.6 (pure Rust). `rdkafka` was the alternative: it supports idempotence and a delivery callback, but it wraps the C library librdkafka, which needs CMake and a C compiler (it does not build on Windows with default features), so `cargo install` would no longer work with a plain Rust toolchain. `rskafka` sends only ApiVersions, Metadata and Produce, which keeps the endpoint's job small. Its limits (no idempotence, no request timeout, retries forever by default, topic auto-creation always requested) are handled in the sink or by the endpoint: keep topic auto-creation off.
+**Client.** The network sinks target Apache Iggy via its high-performance wire protocol bridge and Apache Kafka / Redpanda endpoints using [`rskafka`](https://crates.io/crates/rskafka) 0.6 (pure Rust). `rdkafka` was the alternative: it supports idempotence and a delivery callback, but it wraps the C library librdkafka, which needs CMake and a C compiler (it does not build on Windows with default features), so `cargo install` would no longer work with a plain Rust toolchain. `rskafka` sends only ApiVersions, Metadata and Produce, which keeps the endpoint's job small. Its limits (no idempotence, no request timeout, retries forever by default, topic auto-creation always requested) are handled in the sink or by the endpoint: keep topic auto-creation off.
 
 **Failure.** If the endpoint is unreachable, the topic is missing, a produce is rejected, or a request times out, the run stops and the process exits with a non-zero code. A timeout is reported as "may or may not have been written".
 
 **Duplicates.** Delivery is at-least-once. If an answer is lost after a record was written, the retry stores it again under a new offset. Offsets cannot reveal this, but `replay.run_id` and `replay.seq` identify every record, so a consumer can count distinct records.
 
-**Tests.** The test suite runs the sink against an in-process fake broker that speaks the real wire protocol. To run the same checks against a real endpoint, create an empty topic and run `KAFKA_TEST_ENDPOINT=host:port KAFKA_TEST_TOPIC=name cargo test -- --ignored`.
+**Tests.** The test suite runs the network sinks against an in-process fake broker that speaks the real wire protocol. To run the same checks against a real endpoint, create an empty topic and run `KAFKA_TEST_ENDPOINT=host:port KAFKA_TEST_TOPIC=name cargo test -- --ignored`.
 
 ---
 
@@ -244,8 +284,8 @@ Every setting is also available as a key in the profile file. A CLI flag overrid
 | `--config <PATH>` | `-c` | none | Path to a profile TOML file |
 | `--input-file-path <PATH>` | `-i` | none | Path to the Parquet, CSV or JSONL dataset |
 | `--input-file-format <FMT>` | `-f` | auto | `parquet`, `csv` or `jsonl` |
-| `--sink <SINK>` | `-s` | `stdout` | `kafka` (for Apache Iggy) or `stdout` |
-| `--sink-url <HOST:PORT>` | `-u` | `localhost:9092` | Apache Iggy / Kafka endpoint |
+| `--sink <SINK>` | `-s` | `stdout` | Target sink: `iggy` (Apache Iggy), `kafka` (Apache Kafka / Redpanda), or `stdout` |
+| `--sink-url <HOST:PORT>` | `-u` | `localhost:9092` | Apache Iggy / Kafka / Redpanda endpoint |
 | `--topic <TOPIC>` | `-t` | `events` | Target topic; it must already exist |
 | `--speed <n>` | | `1.0` | Rolls the dataset forward `n` times faster than its original spacing (gaps shrink to `Δt / n`). Accepts `10`, `10x` or `max` (no pacing). Values below 1 slow it down. |
 | `--rate <N>` | `-r` | none | Fixed events per second, ignoring the dataset's own spacing. Mutually exclusive with `--speed`. |
@@ -286,7 +326,7 @@ advance_timestamps = true
 loop_id_salt = true
 
 [sink]
-default_type = "kafka"       # kafka (for Apache Iggy) | stdout
+default_type = "iggy"       # iggy (Apache Iggy) | kafka (Apache Kafka / Redpanda) | stdout
 default_url = "localhost:9092"
 destination = "<topic>"
 ```

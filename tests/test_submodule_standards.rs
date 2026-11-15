@@ -141,10 +141,14 @@ fn test_readme_documentation_completeness() {
         );
     }
 
-    // Must document the Kafka sink, and must not claim sinks that do not exist
+    // Must document the Kafka / Apache Iggy sink, and must not claim sinks that do not exist
     assert!(
         readme.contains("kafka") || readme.contains("Kafka"),
         "README must document Kafka sink"
+    );
+    assert!(
+        readme.contains("Apache Iggy") || readme.contains("Iggy"),
+        "README must document Apache Iggy sink"
     );
     for removed in ["NATS", "Fluvio", "iceoryx2"] {
         assert!(

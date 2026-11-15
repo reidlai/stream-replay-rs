@@ -23,11 +23,11 @@ pub struct CliArgs {
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 
-    /// Target sink: 'kafka' or 'stdout' [default: stdout]
+    /// Target sink: 'kafka' (Apache Iggy / Kafka) or 'stdout' [default: stdout]
     #[arg(short, long)]
     pub sink: Option<String>,
 
-    /// Kafka-compatible endpoint, host:port [default: localhost:9092]
+    /// Apache Iggy / Kafka-compatible endpoint, host:port [default: localhost:9092]
     #[arg(short = 'u', long)]
     pub sink_url: Option<String>,
 

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SINK_URL: &str = "localhost:9092";
 pub const DEFAULT_NATS_URL: &str = "nats://localhost:4222";
+pub const DEFAULT_FLUVIO_URL: &str = "localhost:9003";
 pub const DEFAULT_TOPIC: &str = "events";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,10 +193,22 @@ pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkTyp
         "fluvio" => {
             #[cfg(feature = "fluvio")]
             {
-                Ok(SinkType::Fluvio {
-                    endpoint: url,
-                    topic,
-                })
+                let topic = topic.trim().to_string();
+                if topic.is_empty() {
+                    return Err(ReplayError::Config("Fluvio topic must not be empty".into()));
+                }
+                let trimmed_url = url.trim();
+                if !url.is_empty() && trimmed_url.is_empty() {
+                    return Err(ReplayError::Config(
+                        "Fluvio endpoint must not be empty".into(),
+                    ));
+                }
+                let endpoint = if trimmed_url.is_empty() || trimmed_url == DEFAULT_SINK_URL {
+                    DEFAULT_FLUVIO_URL.to_string()
+                } else {
+                    trimmed_url.to_string()
+                };
+                Ok(SinkType::Fluvio { endpoint, topic })
             }
             #[cfg(not(feature = "fluvio"))]
             {
@@ -306,6 +319,14 @@ impl ReplayConfigBuilder {
     }
 
     pub fn sink(mut self, sink: SinkType) -> Self {
+        #[cfg(feature = "fluvio")]
+        let sink = match sink {
+            SinkType::Fluvio { endpoint, topic } => SinkType::Fluvio {
+                endpoint: endpoint.trim().to_string(),
+                topic: topic.trim().to_string(),
+            },
+            other => other,
+        };
         #[cfg(feature = "iceoryx2")]
         let sink = match sink {
             SinkType::Iceoryx2 { service_name } => SinkType::Iceoryx2 {
@@ -346,9 +367,11 @@ impl ReplayConfigBuilder {
 
     #[cfg(feature = "fluvio")]
     pub fn fluvio_sink(mut self, endpoint: impl Into<String>, topic: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
+        let topic = topic.into();
         self.config.sink = SinkType::Fluvio {
-            endpoint: endpoint.into(),
-            topic: topic.into(),
+            endpoint: endpoint.trim().to_string(),
+            topic: topic.trim().to_string(),
         };
         self
     }
@@ -495,6 +518,19 @@ impl ReplayConfig {
                 ));
             }
         }
+        #[cfg(feature = "fluvio")]
+        if let SinkType::Fluvio { endpoint, topic } = &self.sink {
+            if endpoint.trim().is_empty() {
+                return Err(ReplayError::Config(
+                    "Fluvio endpoint must not be empty".to_string(),
+                ));
+            }
+            if topic.trim().is_empty() {
+                return Err(ReplayError::Config(
+                    "Fluvio topic must not be empty".to_string(),
+                ));
+            }
+        }
         #[cfg(feature = "iceoryx2")]
         if let SinkType::Iceoryx2 { service_name } = &self.sink {
             validate_iceoryx2_service_name(service_name)?;
@@ -541,14 +577,12 @@ impl ReplayConfig {
                     DEFAULT_TOPIC.to_string()
                 }
             });
-        let sink = sink_from_parts(
-            &sink_kind,
-            sink_table
-                .default_url
-                .or(profile.sink_url)
-                .unwrap_or_else(|| DEFAULT_SINK_URL.to_string()),
-            resolved_dest,
-        )?;
+        let resolved_url = match sink_table.default_url.or(profile.sink_url) {
+            Some(u) if u.trim().is_empty() => "   ".to_string(),
+            Some(u) => u,
+            None => DEFAULT_SINK_URL.to_string(),
+        };
+        let sink = sink_from_parts(&sink_kind, resolved_url, resolved_dest)?;
 
         let speed_setting = replay.speed.or(profile.speed);
         let rate = replay.rate.or(profile.rate);

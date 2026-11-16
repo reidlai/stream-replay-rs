@@ -125,11 +125,12 @@ pub fn build_config(args: CliArgs) -> Result<ReplayConfig, ReplayError> {
     {
         let (kind, url, topic) = sink_parts(&cfg.sink);
         let dest = args.service_name.or(args.topic).unwrap_or(topic);
-        cfg.sink = sink_from_parts(
-            &args.sink.unwrap_or(kind),
-            args.sink_url.unwrap_or(url),
-            dest,
-        )?;
+        let raw_url = match args.sink_url {
+            Some(u) if u.trim().is_empty() => "   ".to_string(),
+            Some(u) => u,
+            None => url,
+        };
+        cfg.sink = sink_from_parts(&args.sink.unwrap_or(kind), raw_url, dest)?;
     }
 
     if let Some(ref speed) = args.speed {
@@ -228,7 +229,7 @@ async fn main() {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
-    #[cfg(any(feature = "kafka", feature = "iceoryx2"))]
+    #[cfg(any(feature = "kafka", feature = "fluvio", feature = "iceoryx2"))]
     use stream_replay_rs::sink::SinkType;
 
     fn parse(extra: &[&str]) -> Result<CliArgs, clap::Error> {
@@ -366,6 +367,45 @@ mod tests {
                 topic: "events".to_string()
             }
         );
+    }
+
+    #[cfg(feature = "fluvio")]
+    #[test]
+    fn sink_flag_supports_fluvio() {
+        let cfg = build_config(parse(&["--sink", "fluvio", "--topic", "orders"]).unwrap()).unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Fluvio {
+                endpoint: "localhost:9003".to_string(),
+                topic: "orders".to_string()
+            }
+        );
+
+        let custom = build_config(
+            parse(&[
+                "--sink",
+                "fluvio",
+                "--sink-url",
+                "fluvio-sc:9003",
+                "--topic",
+                "orders",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            custom.sink,
+            SinkType::Fluvio {
+                endpoint: "fluvio-sc:9003".to_string(),
+                topic: "orders".to_string()
+            }
+        );
+
+        assert!(build_config(parse(&["--sink", "fluvio", "--topic", "   "]).unwrap()).is_err());
+        assert!(build_config(
+            parse(&["--sink", "fluvio", "--sink-url", "   ", "--topic", "orders"]).unwrap()
+        )
+        .is_err());
     }
 
     #[cfg(feature = "iceoryx2")]

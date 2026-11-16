@@ -32,3 +32,17 @@ destination = "events"     # topic (it must already exist for iggy / kafka)
 # default_type = "kafka"
 # default_url = "localhost:9092"
 # destination = "events"
+#
+# For NATS JetStream (build with --features nats; a stream must capture the subject):
+# default_type = "nats"
+# default_url = "nats://localhost:4222"
+# destination = "orders.events"
+#
+# For Fluvio (build with --features fluvio; the topic must exist):
+# default_type = "fluvio"
+# default_url = "localhost:9003"
+# destination = "orders"
+#
+# For Eclipse iceoryx2 shared memory (build with --features iceoryx2):
+# default_type = "iceoryx2"
+# service_name = "orders/ipc"

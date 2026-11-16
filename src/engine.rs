@@ -1,7 +1,7 @@
 use crate::config::ReplayConfig;
 use crate::error::ReplayError;
 use crate::reader::{create_reader_with_unit, detect_timestamp_column, RecordReader};
-use crate::sink::{create_sink, Sink, SinkRecord, SinkType};
+use crate::sink::{create_sink, Sink, SinkRecord};
 use crate::time_shift::{render_like, shift_value, TimeShiftEngine};
 use chrono::Utc;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -127,9 +127,7 @@ impl ReplayEngine {
             None
         };
 
-        let topic = match &self.config.sink {
-            SinkType::Kafka { topic, .. } | SinkType::Stdout { topic } => topic.clone(),
-        };
+        let topic = self.config.sink.destination().to_string();
         // Identifies this process so that a duplicate caused by a retry can be recognised.
         let run_id = new_run_id();
 

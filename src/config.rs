@@ -144,13 +144,77 @@ pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
 /// Build a [`SinkType`] from its parts (unused parts are ignored by the chosen sink).
 pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkType, ReplayError> {
     match kind.to_lowercase().as_str() {
-        "kafka" | "iggy" => Ok(SinkType::Kafka {
-            broker_url: url,
-            topic,
-        }),
+        "kafka" | "iggy" => {
+            #[cfg(feature = "kafka")]
+            {
+                Ok(SinkType::Kafka {
+                    broker_url: url,
+                    topic,
+                })
+            }
+            #[cfg(not(feature = "kafka"))]
+            {
+                let _ = (url, topic);
+                Err(ReplayError::Config(
+                    "Kafka sink requested, but stream-replay-rs was compiled without '--features kafka'".into(),
+                ))
+            }
+        }
+        "nats" => {
+            #[cfg(feature = "nats")]
+            {
+                Ok(SinkType::Nats {
+                    url,
+                    subject: topic,
+                })
+            }
+            #[cfg(not(feature = "nats"))]
+            {
+                let _ = (url, topic);
+                Err(ReplayError::Config(
+                    "NATS sink requested, but stream-replay-rs was compiled without '--features nats'".into(),
+                ))
+            }
+        }
+        "fluvio" => {
+            #[cfg(feature = "fluvio")]
+            {
+                Ok(SinkType::Fluvio {
+                    endpoint: url,
+                    topic,
+                })
+            }
+            #[cfg(not(feature = "fluvio"))]
+            {
+                let _ = (url, topic);
+                Err(ReplayError::Config(
+                    "Fluvio sink requested, but stream-replay-rs was compiled without '--features fluvio'".into(),
+                ))
+            }
+        }
+        "iceoryx2" => {
+            #[cfg(feature = "iceoryx2")]
+            {
+                let service_name = if !topic.is_empty() && topic != DEFAULT_TOPIC {
+                    topic
+                } else if !url.is_empty() && url != DEFAULT_SINK_URL {
+                    url
+                } else {
+                    topic
+                };
+                Ok(SinkType::Iceoryx2 { service_name })
+            }
+            #[cfg(not(feature = "iceoryx2"))]
+            {
+                let _ = (url, topic);
+                Err(ReplayError::Config(
+                    "iceoryx2 sink requested, but stream-replay-rs was compiled without '--features iceoryx2'".into(),
+                ))
+            }
+        }
         "stdout" => Ok(SinkType::Stdout { topic }),
         other => Err(ReplayError::Config(format!(
-            "Unknown sink '{other}'. Expected kafka, iggy or stdout."
+            "Unknown sink '{other}'. Supported sinks: kafka, iggy, nats, fluvio, iceoryx2, stdout."
         ))),
     }
 }
@@ -158,9 +222,20 @@ pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkTyp
 /// Split a [`SinkType`] into `(kind, url, topic)`, filling defaults.
 pub fn sink_parts(sink: &SinkType) -> (String, String, String) {
     match sink {
+        #[cfg(feature = "kafka")]
         SinkType::Kafka { broker_url, topic } => {
             ("kafka".into(), broker_url.clone(), topic.clone())
         }
+        #[cfg(feature = "nats")]
+        SinkType::Nats { url, subject } => ("nats".into(), url.clone(), subject.clone()),
+        #[cfg(feature = "fluvio")]
+        SinkType::Fluvio { endpoint, topic } => ("fluvio".into(), endpoint.clone(), topic.clone()),
+        #[cfg(feature = "iceoryx2")]
+        SinkType::Iceoryx2 { service_name } => (
+            "iceoryx2".into(),
+            "".into(),
+            service_name.clone(),
+        ),
         SinkType::Stdout { topic } => {
             ("stdout".into(), DEFAULT_SINK_URL.to_string(), topic.clone())
         }
@@ -217,6 +292,48 @@ impl ReplayConfigBuilder {
 
     pub fn sink(mut self, sink: SinkType) -> Self {
         self.config.sink = sink;
+        self
+    }
+
+    pub fn stdout_sink(mut self, topic: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Stdout {
+            topic: topic.into(),
+        };
+        self
+    }
+
+    #[cfg(feature = "kafka")]
+    pub fn kafka_sink(mut self, broker_url: impl Into<String>, topic: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Kafka {
+            broker_url: broker_url.into(),
+            topic: topic.into(),
+        };
+        self
+    }
+
+    #[cfg(feature = "nats")]
+    pub fn nats_sink(mut self, url: impl Into<String>, subject: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Nats {
+            url: url.into(),
+            subject: subject.into(),
+        };
+        self
+    }
+
+    #[cfg(feature = "fluvio")]
+    pub fn fluvio_sink(mut self, endpoint: impl Into<String>, topic: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Fluvio {
+            endpoint: endpoint.into(),
+            topic: topic.into(),
+        };
+        self
+    }
+
+    #[cfg(feature = "iceoryx2")]
+    pub fn iceoryx2_sink(mut self, service_name: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Iceoryx2 {
+            service_name: service_name.into(),
+        };
         self
     }
 

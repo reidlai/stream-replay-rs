@@ -30,6 +30,7 @@ async fn test_sink_factory_creation() {
 }
 
 /// There is no simulated mode: a Kafka sink without a reachable endpoint is an error.
+#[cfg(feature = "kafka")]
 #[tokio::test]
 async fn test_kafka_sink_fails_without_an_endpoint() {
     // Bind and drop a listener to get a local port that nothing listens on.

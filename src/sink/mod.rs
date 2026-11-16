@@ -1,4 +1,11 @@
+#[cfg(feature = "fluvio")]
+pub mod fluvio;
+#[cfg(feature = "iceoryx2")]
+pub mod iceoryx2;
+#[cfg(feature = "kafka")]
 pub mod kafka;
+#[cfg(feature = "nats")]
+pub mod nats;
 pub mod stdout;
 
 use crate::error::ReplayError;
@@ -38,13 +45,59 @@ pub trait Sink: Send + Sync {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SinkType {
-    Kafka { broker_url: String, topic: String },
-    Stdout { topic: String },
+    #[cfg(feature = "kafka")]
+    Kafka {
+        broker_url: String,
+        topic: String,
+    },
+    #[cfg(feature = "nats")]
+    Nats {
+        url: String,
+        #[serde(alias = "topic")]
+        subject: String,
+    },
+    #[cfg(feature = "fluvio")]
+    Fluvio {
+        #[serde(alias = "url")]
+        endpoint: String,
+        topic: String,
+    },
+    #[cfg(feature = "iceoryx2")]
+    Iceoryx2 {
+        #[serde(alias = "topic")]
+        service_name: String,
+    },
+    Stdout {
+        topic: String,
+    },
+}
+
+impl SinkType {
+    pub fn destination(&self) -> &str {
+        match self {
+            #[cfg(feature = "kafka")]
+            SinkType::Kafka { topic, .. } => topic,
+            #[cfg(feature = "nats")]
+            SinkType::Nats { subject, .. } => subject,
+            #[cfg(feature = "fluvio")]
+            SinkType::Fluvio { topic, .. } => topic,
+            #[cfg(feature = "iceoryx2")]
+            SinkType::Iceoryx2 { service_name } => service_name,
+            SinkType::Stdout { topic } => topic,
+        }
+    }
 }
 
 pub async fn create_sink(sink_type: &SinkType) -> Result<Box<dyn Sink>, ReplayError> {
     match sink_type {
         SinkType::Stdout { topic } => Ok(Box::new(stdout::StdoutSink::new(topic))),
+        #[cfg(feature = "kafka")]
         SinkType::Kafka { broker_url, topic } => kafka::create_kafka_sink(broker_url, topic).await,
+        #[cfg(feature = "nats")]
+        SinkType::Nats { url, subject } => nats::create_nats_sink(url, subject).await,
+        #[cfg(feature = "fluvio")]
+        SinkType::Fluvio { endpoint, topic } => fluvio::create_fluvio_sink(endpoint, topic).await,
+        #[cfg(feature = "iceoryx2")]
+        SinkType::Iceoryx2 { service_name } => iceoryx2::create_iceoryx2_sink(service_name).await,
     }
 }

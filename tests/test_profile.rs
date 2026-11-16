@@ -34,6 +34,7 @@ fn test_example_profile_loads_with_documented_keys() {
     cfg.validate().unwrap();
 }
 
+#[cfg(feature = "kafka")]
 #[test]
 fn test_sectioned_profile_with_kafka_sink_and_fixed_rate() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -69,6 +70,7 @@ destination = "replayed"
     );
 }
 
+#[cfg(feature = "kafka")]
 #[test]
 fn test_sectioned_profile_with_iggy_sink() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -115,6 +117,7 @@ rate = 25
     assert!(matches!(err, ReplayError::Config(_)));
 }
 
+#[cfg(feature = "kafka")]
 #[test]
 fn test_legacy_flat_profile_keys_and_ignored_unknown_keys() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -142,6 +145,7 @@ loop_playback = true
     );
 }
 
+#[cfg(feature = "kafka")]
 #[test]
 fn test_flat_profile_with_iggy_sink() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -167,7 +171,16 @@ topic = "stream-topic"
 
 #[test]
 fn test_removed_sinks_are_rejected() {
-    for removed in ["nats", "fluvio", "iceoryx2"] {
+    #[allow(unused_mut)]
+    let mut uncompiled: Vec<&str> = Vec::new();
+    #[cfg(not(feature = "nats"))]
+    uncompiled.push("nats");
+    #[cfg(not(feature = "fluvio"))]
+    uncompiled.push("fluvio");
+    #[cfg(not(feature = "iceoryx2"))]
+    uncompiled.push("iceoryx2");
+
+    for removed in uncompiled {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(
             tmp,

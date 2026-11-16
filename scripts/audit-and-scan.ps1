@@ -36,12 +36,22 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo clippy detected warnings or errors. Build halted."
     exit 1
 }
+cargo clippy --all-targets --features full -- -D warnings
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "cargo clippy --features full detected warnings or errors. Build halted."
+    exit 1
+}
 
 # 3. Unit & Integration Test Gate
 Write-Host "--> [3/6] Running unit and integration tests (cargo test)..." -ForegroundColor Yellow
 cargo test --all-targets
 if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo test failed. Fix failing tests before committing."
+    exit 1
+}
+cargo test --all-targets --features full
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "cargo test --features full failed. Fix failing tests before committing."
     exit 1
 }
 

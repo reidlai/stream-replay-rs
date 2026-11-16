@@ -32,9 +32,23 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: cargo-clippy-full
+        name: Rust Lint Gate All Features (cargo clippy --features full -D warnings)
+        entry: cargo clippy --all-targets --features full -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: cargo-test
         name: Rust Unit & Integration Test Gate (cargo test)
         entry: cargo test --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-test-full
+        name: Rust Unit & Integration Test Gate All Features (cargo test --features full)
+        entry: cargo test --all-targets --features full
         language: system
         pass_filenames: false
         always_run: true

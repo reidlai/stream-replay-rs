@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SINK_URL: &str = "localhost:9092";
+pub const DEFAULT_NATS_URL: &str = "nats://localhost:4222";
 pub const DEFAULT_TOPIC: &str = "events";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,9 +164,19 @@ pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkTyp
         "nats" => {
             #[cfg(feature = "nats")]
             {
+                let subject = topic.trim().to_string();
+                if subject.is_empty() {
+                    return Err(ReplayError::Config("NATS subject must not be empty".into()));
+                }
+                let trimmed_url = url.trim();
+                let resolved_url = if trimmed_url.is_empty() || trimmed_url == DEFAULT_SINK_URL {
+                    DEFAULT_NATS_URL.to_string()
+                } else {
+                    trimmed_url.to_string()
+                };
                 Ok(SinkType::Nats {
-                    url,
-                    subject: topic,
+                    url: resolved_url,
+                    subject,
                 })
             }
             #[cfg(not(feature = "nats"))]
@@ -231,11 +242,7 @@ pub fn sink_parts(sink: &SinkType) -> (String, String, String) {
         #[cfg(feature = "fluvio")]
         SinkType::Fluvio { endpoint, topic } => ("fluvio".into(), endpoint.clone(), topic.clone()),
         #[cfg(feature = "iceoryx2")]
-        SinkType::Iceoryx2 { service_name } => (
-            "iceoryx2".into(),
-            "".into(),
-            service_name.clone(),
-        ),
+        SinkType::Iceoryx2 { service_name } => ("iceoryx2".into(), "".into(), service_name.clone()),
         SinkType::Stdout { topic } => {
             ("stdout".into(), DEFAULT_SINK_URL.to_string(), topic.clone())
         }
@@ -313,9 +320,11 @@ impl ReplayConfigBuilder {
 
     #[cfg(feature = "nats")]
     pub fn nats_sink(mut self, url: impl Into<String>, subject: impl Into<String>) -> Self {
+        let url = url.into();
+        let subject = subject.into();
         self.config.sink = SinkType::Nats {
-            url: url.into(),
-            subject: subject.into(),
+            url: url.trim().to_string(),
+            subject: subject.trim().to_string(),
         };
         self
     }
@@ -442,6 +451,19 @@ impl ReplayConfig {
                 "Invalid speed multiplier: {}",
                 self.speed_multiplier
             )));
+        }
+        #[cfg(feature = "nats")]
+        if let SinkType::Nats { url, subject } = &self.sink {
+            if url.trim().is_empty() {
+                return Err(ReplayError::Config(
+                    "NATS endpoint URL must not be empty".to_string(),
+                ));
+            }
+            if subject.trim().is_empty() {
+                return Err(ReplayError::Config(
+                    "NATS subject must not be empty".to_string(),
+                ));
+            }
         }
         Ok(())
     }

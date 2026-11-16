@@ -228,7 +228,7 @@ async fn main() {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
-    #[cfg(feature = "kafka")]
+    #[cfg(any(feature = "kafka", feature = "iceoryx2"))]
     use stream_replay_rs::sink::SinkType;
 
     fn parse(extra: &[&str]) -> Result<CliArgs, clap::Error> {
@@ -365,6 +365,25 @@ mod tests {
                 broker_url: "localhost:9092".to_string(),
                 topic: "events".to_string()
             }
+        );
+    }
+
+    #[cfg(feature = "iceoryx2")]
+    #[test]
+    fn sink_flag_supports_iceoryx2_service_name() {
+        let cfg =
+            build_config(parse(&["--sink", "iceoryx2", "--service-name", "orders/ipc"]).unwrap())
+                .unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Iceoryx2 {
+                service_name: "orders/ipc".to_string()
+            }
+        );
+
+        assert!(
+            build_config(parse(&["--sink", "iceoryx2", "--service-name", "   "]).unwrap(),)
+                .is_err()
         );
     }
 

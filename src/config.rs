@@ -47,6 +47,7 @@ pub struct SinkSection {
     pub default_type: Option<String>,
     pub default_url: Option<String>,
     pub destination: Option<String>,
+    pub service_name: Option<String>,
 }
 
 /// `sink` is either a sink name (flat profile) or a `[sink]` table.
@@ -73,6 +74,7 @@ pub struct ProfileConfig {
     pub key_column: Option<String>,
     pub sink_url: Option<String>,
     pub topic: Option<String>,
+    pub service_name: Option<String>,
     pub speed: Option<SpeedSetting>,
     pub rate: Option<u64>,
     pub event_time: Option<EventTimeMode>,
@@ -206,13 +208,19 @@ pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkTyp
         "iceoryx2" => {
             #[cfg(feature = "iceoryx2")]
             {
-                let service_name = if !topic.is_empty() && topic != DEFAULT_TOPIC {
-                    topic
-                } else if !url.is_empty() && url != DEFAULT_SINK_URL {
-                    url
+                let trimmed_topic = topic.trim();
+                let trimmed_url = url.trim();
+                let service_name = if !trimmed_topic.is_empty() && trimmed_topic != DEFAULT_TOPIC {
+                    trimmed_topic.to_string()
+                } else if (trimmed_topic.is_empty() || trimmed_topic == DEFAULT_TOPIC)
+                    && !trimmed_url.is_empty()
+                    && trimmed_url != DEFAULT_SINK_URL
+                {
+                    trimmed_url.to_string()
                 } else {
-                    topic
+                    trimmed_topic.to_string()
                 };
+                validate_iceoryx2_service_name(&service_name)?;
                 Ok(SinkType::Iceoryx2 { service_name })
             }
             #[cfg(not(feature = "iceoryx2"))]
@@ -298,6 +306,13 @@ impl ReplayConfigBuilder {
     }
 
     pub fn sink(mut self, sink: SinkType) -> Self {
+        #[cfg(feature = "iceoryx2")]
+        let sink = match sink {
+            SinkType::Iceoryx2 { service_name } => SinkType::Iceoryx2 {
+                service_name: service_name.trim().to_string(),
+            },
+            other => other,
+        };
         self.config.sink = sink;
         self
     }
@@ -340,8 +355,9 @@ impl ReplayConfigBuilder {
 
     #[cfg(feature = "iceoryx2")]
     pub fn iceoryx2_sink(mut self, service_name: impl Into<String>) -> Self {
+        let service_name = service_name.into();
         self.config.sink = SinkType::Iceoryx2 {
-            service_name: service_name.into(),
+            service_name: service_name.trim().to_string(),
         };
         self
     }
@@ -429,6 +445,20 @@ impl Default for ReplayConfigBuilder {
     }
 }
 
+#[cfg(feature = "iceoryx2")]
+fn validate_iceoryx2_service_name(service_name: &str) -> Result<(), ReplayError> {
+    let trimmed = service_name.trim();
+    if trimmed.is_empty() {
+        return Err(ReplayError::Config(
+            "iceoryx2 service_name must not be empty".to_string(),
+        ));
+    }
+    iceoryx2::prelude::ServiceName::new(trimmed).map_err(|e| {
+        ReplayError::Config(format!("Invalid iceoryx2 service_name '{trimmed}': {e}"))
+    })?;
+    Ok(())
+}
+
 impl ReplayConfig {
     pub fn builder() -> ReplayConfigBuilder {
         ReplayConfigBuilder::new()
@@ -465,6 +495,10 @@ impl ReplayConfig {
                 ));
             }
         }
+        #[cfg(feature = "iceoryx2")]
+        if let SinkType::Iceoryx2 { service_name } = &self.sink {
+            validate_iceoryx2_service_name(service_name)?;
+        }
         Ok(())
     }
 
@@ -490,16 +524,30 @@ impl ReplayConfig {
             .default_type
             .or(sink_name)
             .unwrap_or_else(|| "stdout".to_string());
+        let has_explicit_dest = sink_table.service_name.is_some()
+            || sink_table.destination.is_some()
+            || profile.service_name.is_some()
+            || profile.topic.is_some();
+        let resolved_dest = sink_table
+            .service_name
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| sink_table.destination.filter(|s| !s.trim().is_empty()))
+            .or_else(|| profile.service_name.filter(|s| !s.trim().is_empty()))
+            .or_else(|| profile.topic.filter(|s| !s.trim().is_empty()))
+            .unwrap_or_else(|| {
+                if has_explicit_dest {
+                    String::new()
+                } else {
+                    DEFAULT_TOPIC.to_string()
+                }
+            });
         let sink = sink_from_parts(
             &sink_kind,
             sink_table
                 .default_url
                 .or(profile.sink_url)
                 .unwrap_or_else(|| DEFAULT_SINK_URL.to_string()),
-            sink_table
-                .destination
-                .or(profile.topic)
-                .unwrap_or_else(|| DEFAULT_TOPIC.to_string()),
+            resolved_dest,
         )?;
 
         let speed_setting = replay.speed.or(profile.speed);

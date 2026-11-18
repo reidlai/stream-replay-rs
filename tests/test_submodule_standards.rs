@@ -154,12 +154,32 @@ fn test_readme_documentation_completeness() {
         readme.contains("stdout"),
         "README must document stdout sink"
     );
-    for removed in ["NATS", "Fluvio", "iceoryx2"] {
+    for sink in ["iggy", "kafka", "nats", "fluvio", "iceoryx2", "stdout"] {
         assert!(
-            !readme.contains(removed),
-            "README must not claim the {removed} sink: it is not implemented"
+            readme.contains(&format!("`{sink}`")),
+            "README must document the `{sink}` sink"
         );
     }
+    for needle in ["JetStream", "Fluvio", "Eclipse iceoryx2", "--service-name"] {
+        assert!(readme.contains(needle), "README must mention {needle}");
+    }
+    for feature in [
+        "`default`",
+        "`kafka`",
+        "`nats`",
+        "`fluvio`",
+        "`iceoryx2`",
+        "`full`",
+    ] {
+        assert!(
+            readme.contains(&format!("| {feature} |")),
+            "README Cargo features table must list {feature}"
+        );
+    }
+    assert!(
+        readme.contains("--features full"),
+        "README must show how to build every sink"
+    );
 
     // Must document library API & Feature flags
     assert!(

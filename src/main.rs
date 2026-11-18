@@ -23,17 +23,21 @@ pub struct CliArgs {
     #[arg(short = 'f', long)]
     pub input_file_format: Option<String>,
 
-    /// Target sink: 'iggy' (Apache Iggy), 'kafka' (Apache Kafka / Redpanda), or 'stdout' [default: stdout]
+    /// Target sink: 'kafka', 'iggy' (Apache Iggy), 'nats' (NATS JetStream), 'fluvio' (Fluvio), 'iceoryx2' (Eclipse iceoryx2), or 'stdout' [default: stdout]
     #[arg(short, long)]
     pub sink: Option<String>,
 
-    /// Apache Iggy / Kafka / Redpanda endpoint, host:port [default: localhost:9092]
+    /// Apache Iggy / Kafka / Redpanda / NATS / Fluvio endpoint [default: localhost:9092]
     #[arg(short = 'u', long)]
     pub sink_url: Option<String>,
 
-    /// Destination topic; it must already exist [default: events]
+    /// Destination topic or subject; it must already exist [default: events]
     #[arg(short, long)]
     pub topic: Option<String>,
+
+    /// Service name for Eclipse iceoryx2 IPC sink (overrides --topic)
+    #[arg(long)]
+    pub service_name: Option<String>,
 
     /// Roll the dataset forward N times faster than its original spacing
     /// (1, 2.5, 10x, or max for no pacing) [default: 1.0]
@@ -114,13 +118,19 @@ pub fn build_config(args: CliArgs) -> Result<ReplayConfig, ReplayError> {
         cfg.input_file_format = Some(f);
     }
 
-    if args.sink.is_some() || args.sink_url.is_some() || args.topic.is_some() {
+    if args.sink.is_some()
+        || args.sink_url.is_some()
+        || args.topic.is_some()
+        || args.service_name.is_some()
+    {
         let (kind, url, topic) = sink_parts(&cfg.sink);
-        cfg.sink = sink_from_parts(
-            &args.sink.unwrap_or(kind),
-            args.sink_url.unwrap_or(url),
-            args.topic.unwrap_or(topic),
-        )?;
+        let dest = args.service_name.or(args.topic).unwrap_or(topic);
+        let raw_url = match args.sink_url {
+            Some(u) if u.trim().is_empty() => "   ".to_string(),
+            Some(u) => u,
+            None => url,
+        };
+        cfg.sink = sink_from_parts(&args.sink.unwrap_or(kind), raw_url, dest)?;
     }
 
     if let Some(ref speed) = args.speed {
@@ -219,6 +229,7 @@ async fn main() {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+    #[cfg(any(feature = "kafka", feature = "fluvio", feature = "iceoryx2"))]
     use stream_replay_rs::sink::SinkType;
 
     fn parse(extra: &[&str]) -> Result<CliArgs, clap::Error> {
@@ -302,6 +313,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "kafka")]
     #[test]
     fn sink_flags_default_to_stdout_and_override_independently() {
         let cfg = build_config(parse(&[]).unwrap()).unwrap();
@@ -333,6 +345,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "kafka")]
     #[test]
     fn sink_flag_supports_iggy_alias() {
         let cfg = build_config(
@@ -353,6 +366,64 @@ mod tests {
                 broker_url: "localhost:9092".to_string(),
                 topic: "events".to_string()
             }
+        );
+    }
+
+    #[cfg(feature = "fluvio")]
+    #[test]
+    fn sink_flag_supports_fluvio() {
+        let cfg = build_config(parse(&["--sink", "fluvio", "--topic", "orders"]).unwrap()).unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Fluvio {
+                endpoint: "localhost:9003".to_string(),
+                topic: "orders".to_string()
+            }
+        );
+
+        let custom = build_config(
+            parse(&[
+                "--sink",
+                "fluvio",
+                "--sink-url",
+                "fluvio-sc:9003",
+                "--topic",
+                "orders",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            custom.sink,
+            SinkType::Fluvio {
+                endpoint: "fluvio-sc:9003".to_string(),
+                topic: "orders".to_string()
+            }
+        );
+
+        assert!(build_config(parse(&["--sink", "fluvio", "--topic", "   "]).unwrap()).is_err());
+        assert!(build_config(
+            parse(&["--sink", "fluvio", "--sink-url", "   ", "--topic", "orders"]).unwrap()
+        )
+        .is_err());
+    }
+
+    #[cfg(feature = "iceoryx2")]
+    #[test]
+    fn sink_flag_supports_iceoryx2_service_name() {
+        let cfg =
+            build_config(parse(&["--sink", "iceoryx2", "--service-name", "orders/ipc"]).unwrap())
+                .unwrap();
+        assert_eq!(
+            cfg.sink,
+            SinkType::Iceoryx2 {
+                service_name: "orders/ipc".to_string()
+            }
+        );
+
+        assert!(
+            build_config(parse(&["--sink", "iceoryx2", "--service-name", "   "]).unwrap(),)
+                .is_err()
         );
     }
 

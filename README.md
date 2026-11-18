@@ -1,7 +1,7 @@
 # stream-replay-rs
 
 > **Generic, high-throughput event replayer in pure Rust**  
-> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Apache Iggy (via wire-protocol bridge), Apache Kafka / Redpanda endpoints, or stdout.
+> Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Apache Iggy (via wire-protocol bridge), Apache Kafka / Redpanda, NATS JetStream, Fluvio, Eclipse iceoryx2 shared memory, or stdout.
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#-license)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#-requirements--installation)
@@ -32,6 +32,9 @@ flowchart TD
     subgraph Sinks ["📡 Pluggable sinks"]
         Iggy["Apache Iggy<br/>(Port 9092 via wire bridge)"]
         Kafka["Apache Kafka / Redpanda<br/>(via Kafka wire protocol)"]
+        Nats["NATS JetStream<br/>(feature: nats)"]
+        Fluvio["Fluvio<br/>(feature: fluvio)"]
+        Iceoryx2["Eclipse iceoryx2<br/>(zero-copy shared memory, feature: iceoryx2)"]
         Stdout["Terminal stdout<br/>(inspection / dry-run)"]
     end
 
@@ -40,6 +43,9 @@ flowchart TD
     Reader --> TimeEngine --> Salter --> Pacer
     Pacer --> Iggy
     Pacer --> Kafka
+    Pacer --> Nats
+    Pacer --> Fluvio
+    Pacer --> Iceoryx2
     Pacer --> Stdout
 ```
 
@@ -72,7 +78,7 @@ cargo install --git https://github.com/reidlai/stream-replay-rs
 4. **Timestamp rebasing**: historical timestamps in any supported unit or format are rebased onto the live clock (see [Timestamp rebasing and speed](#-timestamp-rebasing-and-speed)). With `--advance-loop-timestamps`, looping never moves time backward.
 5. **Speed or fixed rate**: `--speed <n>` rolls the dataset forward `n` times faster than its original spacing; `--rate <n>` emits a fixed number of events per second. The two are mutually exclusive.
 6. **Loop entity ID salting**: appends `_L1`, `_L2`, … to entity keys across loops so downstream stores do not see primary-key collisions.
-7. **Pluggable sinks**: publishes to Apache Iggy (via wire-protocol bridge on port 9092), native Apache Kafka / Redpanda endpoints (pure-Rust wire protocol client, no C toolchain), or terminal `stdout` for inspection and dry-run. A delivery failure ends the run with a non-zero exit code; nothing is simulated. See [Pluggable Sinks](#-pluggable-sinks).
+7. **Pluggable sinks**: publishes to Apache Iggy (via wire-protocol bridge on port 9092), Apache Kafka / Redpanda, NATS JetStream, Fluvio, Eclipse iceoryx2 zero-copy shared memory, or terminal `stdout` for inspection and dry-run. `iggy`, `kafka` and `stdout` are in the default build; `nats`, `fluvio` and `iceoryx2` are opt-in [Cargo features](#-cargo-features). A delivery failure ends the run with a non-zero exit code; nothing is simulated. See [Pluggable Sinks](#-pluggable-sinks).
 8. **Progress bar**: elapsed time, events sent, live event rate and ETA.
 
 ---
@@ -157,14 +163,41 @@ cargo build --release
   --sink kafka --sink-url localhost:9092 --topic <topic>
 ```
 
-### 5. Fixed rate
+### 5. Publish to NATS JetStream (`nats`)
+
+```bash
+# Build with the nats feature. A JetStream stream capturing the subject must already exist.
+cargo build --release --features nats
+./target/release/stream-replay-rs --config config/profiles/example.toml \
+  --sink nats --sink-url nats://localhost:4222 --topic orders.events
+```
+
+### 6. Publish to Fluvio (`fluvio`)
+
+```bash
+# Build with the fluvio feature. The topic must already exist.
+cargo build --release --features fluvio
+./target/release/stream-replay-rs --config config/profiles/example.toml \
+  --sink fluvio --sink-url localhost:9003 --topic orders
+```
+
+### 7. Publish over Eclipse iceoryx2 shared memory (`iceoryx2`)
+
+```bash
+# Build with the iceoryx2 feature. Subscribers on the same host open the same service name.
+cargo build --release --features iceoryx2
+./target/release/stream-replay-rs --config config/profiles/example.toml \
+  --sink iceoryx2 --service-name orders/ipc
+```
+
+### 8. Fixed rate
 
 ```bash
 # Emit 25 events per second regardless of the dataset's own spacing
 ./target/release/stream-replay-rs --config config/profiles/example.toml --rate 25
 ```
 
-### 6. Continuous looping with ID salting
+### 9. Continuous looping with ID salting
 
 ```bash
 ./target/release/stream-replay-rs \
@@ -214,19 +247,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🏷️ Cargo Features
 
-There are no optional features. All pluggable sinks (`iggy`, `kafka`, `stdout`) are always built. The network sinks use a pure-Rust client (`rskafka`), so `cargo install` needs no CMake, C compiler or OpenSSL.
+Each transport driver lives behind a Cargo feature, so a default install stays small and fast to compile. `stdout` is always built.
+
+| Feature | Sink(s) enabled | Driver crate | In default build |
+|---------|-----------------|--------------|------------------|
+| `default` | `kafka` (also serves `iggy`) | `rskafka` | yes |
+| `kafka` | `kafka`, `iggy` | `rskafka` | yes |
+| `nats` | `nats` | `async-nats` | no |
+| `fluvio` | `fluvio` | `fluvio` | no |
+| `iceoryx2` | `iceoryx2` | `iceoryx2` | no |
+| `full` | all of the above | all of the above | no |
+
+```bash
+cargo install --path .                                       # kafka / iggy + stdout
+cargo install --path . --features nats,fluvio                # pick transports
+cargo install --path . --features full                       # every sink
+cargo build --no-default-features                            # stdout only, no broker dependencies
+```
+
+Requesting a sink whose feature was not compiled in fails with a clear error, for example `NATS sink requested, but stream-replay-rs was compiled without '--features nats'`. The default `kafka` client (`rskafka`) is pure Rust, so a default `cargo install` needs no CMake, C compiler or OpenSSL.
 
 ---
 
 ## 📡 Pluggable Sinks
 
-`stream-replay-rs` provides three pluggable sinks for replaying event streams: `iggy`, `kafka`, and `stdout`.
+`stream-replay-rs` provides six pluggable sinks: `iggy`, `kafka`, `nats`, `fluvio`, `iceoryx2` and `stdout`. `iggy`, `kafka` and `stdout` are in the default build; the others need their [Cargo feature](#-cargo-features) (or `--features full`).
 
-| Sink | Target Endpoint | Wire Protocol | Usage & Semantics |
-|------|-----------------|---------------|-------------------|
-| `iggy` | Apache Iggy streaming broker (`localhost:9092`) | Kafka wire protocol via Iggy wire bridge | High-throughput streaming broker replay; keyed partitioning, at-least-once delivery |
-| `kafka` | Apache Kafka, Redpanda, or wire-compatible brokers | Native Kafka wire protocol | Distributed streaming replay; keyed partitioning, at-least-once delivery |
-| `stdout` | Terminal / Standard output | None (formatted text/payload) | Local inspection, dry runs, smoke testing, and pipeline chaining without broker dependencies |
+| Sink | Feature | Target Endpoint | Protocol | Usage & Semantics |
+|------|---------|-----------------|----------|-------------------|
+| `iggy` | `kafka` (default) | Apache Iggy streaming broker (`localhost:9092`) | Kafka wire protocol via Iggy wire bridge | High-throughput streaming broker replay; keyed partitioning, at-least-once delivery |
+| `kafka` | `kafka` (default) | Apache Kafka, Redpanda, or wire-compatible brokers | Native Kafka wire protocol | Distributed streaming replay; keyed partitioning, at-least-once delivery |
+| `nats` | `nats` | NATS server with JetStream (`nats://localhost:4222`) | NATS + JetStream | Subject publish with `PubAck` verification; replay headers and `Nats-Msg-Id` for server-side dedup |
+| `fluvio` | `fluvio` | Fluvio cluster (`localhost:9003`) | Fluvio SC/SPU | Topic produce routed by `RecordKey`, at-least-once, SPU acknowledgment |
+| `iceoryx2` | `iceoryx2` | Local shared-memory service (`--service-name`) | Zero-copy IPC (`[u8]` slices) | Microsecond-level same-host delivery; payload only (no keys or headers) |
+| `stdout` | always | Terminal / Standard output | None (formatted text/payload) | Local inspection, dry runs, smoke testing, and pipeline chaining without broker dependencies |
 
 ### Supported Sinks
 
@@ -242,7 +296,25 @@ There are no optional features. All pluggable sinks (`iggy`, `kafka`, `stdout`) 
 - **Connection Semantics**: Pure-Rust client (`rskafka`), direct TCP connection, `acks=all` (-1). Delivery is at-least-once with deterministic murmur2 partition routing by key, custom replay tracking headers, and rebased event timestamps.
 - **Endpoints**: Apache Kafka clusters, Redpanda brokers, or any wire-compatible event streaming endpoint (default: `localhost:9092`).
 
-#### 3. Terminal stdout (`--sink stdout`)
+#### 3. NATS JetStream (`--sink nats`, feature `nats`)
+- **Configuration**: `--sink nats --sink-url nats://<host>:4222 --topic <subject>` or `default_type = "nats"` in profile. An empty or default Kafka URL becomes `nats://localhost:4222`.
+- **Connection Semantics**: pure-Rust `async-nats`; publishes through JetStream and waits for each `PubAck`. A JetStream stream capturing the subject must already exist; `503 No Responders` fails the run.
+- **Metadata**: NATS headers `replay.run_id`, `replay.seq`, `replay.loop`, `replay.key`, `replay.timestamp`, plus `Nats-Msg-Id` (`<run_id>:<seq>`) so JetStream can drop retry duplicates.
+- **Time limits**: 5 s to connect, 30 s per publish + ack; the first failure latches and ends the run.
+
+#### 4. Fluvio (`--sink fluvio`, feature `fluvio`)
+- **Configuration**: `--sink fluvio --sink-url <host>:9003 --topic <topic>` or `default_type = "fluvio"` in profile. An empty or default Kafka URL becomes `localhost:9003`; `profile` or `profile:<name>` selects a Fluvio profile.
+- **Connection Semantics**: pure-Rust `fluvio` client, at-least-once delivery, `ReadCommitted` isolation; records are routed by `RecordKey` (the entity key) and each record waits for the SPU acknowledgment. The topic must already exist.
+- **Metadata**: Fluvio has no header map, so the replay headers (`replay.run_id`, `replay.seq`, `replay.loop`, `replay.key`, `replay.timestamp`) are added as fields of JSON object payloads.
+- **Time limits**: 5 s to connect, 30 s per produce; the first failure latches and ends the run.
+
+#### 5. Eclipse iceoryx2 (`--sink iceoryx2`, feature `iceoryx2`)
+- **Configuration**: `--sink iceoryx2 --service-name <name>` (or `--topic <name>`), or `default_type = "iceoryx2"` with `service_name` / `destination` in profile.
+- **Connection Semantics**: opens a `publish_subscribe::<[u8]>` service and loans shared-memory slices (zero-copy to subscribers on the same host). Payload bytes only: keys, timestamps and replay headers are not transmitted. A slice larger than the initial 4 KiB grows by powers of two.
+- **Backpressure**: subscriber buffers hold 256 samples with safe overflow; a slow subscriber loses the oldest samples while the run continues.
+- **Failure**: an invalid service name, a type-incompatible existing service, or a failed loan or send ends the run.
+
+#### 6. Terminal stdout (`--sink stdout`)
 - **Configuration**: `--sink stdout` (the default) or `default_type = "stdout"` in profile.
 - **Wire Protocol**: None (emits structured event lines to stdout).
 - **Connection Semantics**: Zero network activity, bounded memory footprint, and zero broker dependencies. Formatted events are written to terminal standard output, ideal for local inspection, dry runs, smoke testing, or piping into command-line utilities.
@@ -284,9 +356,10 @@ Every setting is also available as a key in the profile file. A CLI flag overrid
 | `--config <PATH>` | `-c` | none | Path to a profile TOML file |
 | `--input-file-path <PATH>` | `-i` | none | Path to the Parquet, CSV or JSONL dataset |
 | `--input-file-format <FMT>` | `-f` | auto | `parquet`, `csv` or `jsonl` |
-| `--sink <SINK>` | `-s` | `stdout` | Target sink: `iggy` (Apache Iggy), `kafka` (Apache Kafka / Redpanda), or `stdout` |
-| `--sink-url <HOST:PORT>` | `-u` | `localhost:9092` | Apache Iggy / Kafka / Redpanda endpoint |
-| `--topic <TOPIC>` | `-t` | `events` | Target topic; it must already exist |
+| `--sink <SINK>` | `-s` | `stdout` | Target sink: `iggy`, `kafka`, `nats`, `fluvio`, `iceoryx2` or `stdout` (`nats`, `fluvio` and `iceoryx2` need their Cargo feature) |
+| `--sink-url <URL>` | `-u` | per sink | Endpoint: `localhost:9092` (iggy/kafka), `nats://localhost:4222` (nats), `localhost:9003` (fluvio) |
+| `--topic <TOPIC>` | `-t` | `events` | Target topic, NATS subject or iceoryx2 service name; it must already exist |
+| `--service-name <NAME>` | | none | iceoryx2 service name (overrides `--topic`) |
 | `--speed <n>` | | `1.0` | Rolls the dataset forward `n` times faster than its original spacing (gaps shrink to `Δt / n`). Accepts `10`, `10x` or `max` (no pacing). Values below 1 slow it down. |
 | `--rate <N>` | `-r` | none | Fixed events per second, ignoring the dataset's own spacing. Mutually exclusive with `--speed`. |
 | `--timestamp-column <COL>` | | auto-detect | The pacing column that drives the emit schedule |
@@ -326,9 +399,10 @@ advance_timestamps = true
 loop_id_salt = true
 
 [sink]
-default_type = "iggy"       # iggy (Apache Iggy) | kafka (Apache Kafka / Redpanda) | stdout
+default_type = "iggy"       # iggy | kafka | nats | fluvio | iceoryx2 | stdout (nats, fluvio, iceoryx2 need their Cargo feature)
 default_url = "localhost:9092"
-destination = "<topic>"
+destination = "<topic>"      # topic, NATS subject, or iceoryx2 service name
+# service_name = "<name>"    # iceoryx2 only; wins over destination
 ```
 
 Run it:

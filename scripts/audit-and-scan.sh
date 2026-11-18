@@ -26,11 +26,19 @@ if ! cargo clippy --all-targets -- -D warnings; then
     echo "ERROR: cargo clippy detected warnings or errors. Build halted." >&2
     exit 1
 fi
+if ! cargo clippy --all-targets --features full -- -D warnings; then
+    echo "ERROR: cargo clippy --features full detected warnings or errors. Build halted." >&2
+    exit 1
+fi
 
 # 3. Unit & Integration Test Gate
 echo "--> [3/6] Running unit and integration tests (cargo test)..."
 if ! cargo test --all-targets; then
     echo "ERROR: cargo test failed. Fix failing tests before committing." >&2
+    exit 1
+fi
+if ! cargo test --all-targets --features full; then
+    echo "ERROR: cargo test --features full failed. Fix failing tests before committing." >&2
     exit 1
 fi
 

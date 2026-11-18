@@ -3,6 +3,8 @@
 //! Kafka-compatible endpoint with `KAFKA_TEST_ENDPOINT=host:port KAFKA_TEST_TOPIC=name cargo
 //! test -- --ignored` (the topic must exist and be empty).
 
+#![cfg(feature = "kafka")]
+
 use bytes::{Bytes, BytesMut};
 use kafka_protocol::messages::api_versions_response::ApiVersion;
 use kafka_protocol::messages::metadata_response::{

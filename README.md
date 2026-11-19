@@ -3,7 +3,7 @@
 > **Generic, high-throughput event replayer in pure Rust**  
 > Turns any historical CSV, Parquet or JSONL dataset into a live event stream: it rebases the dataset's timestamps onto the live clock, paces events by speed or fixed rate, and publishes them to Apache Iggy (via wire-protocol bridge), Apache Kafka / Redpanda, NATS JetStream, Fluvio, Eclipse iceoryx2 shared memory, or stdout.
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#-license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#-requirements--installation)
 [![Tier](https://img.shields.io/badge/DevSecOps-Tier%201%20Shift--Left-brightgreen.svg)](#-tier-1-devsecops--security-gate)
 
@@ -441,4 +441,4 @@ pwsh ./scripts/audit-and-scan.ps1
 
 ## 📄 License
 
-Dual-licensed under the **MIT License** and **Apache License 2.0**.
+Licensed under the [MIT License](LICENSE).

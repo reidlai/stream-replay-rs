@@ -242,6 +242,7 @@ fn test_repository_is_generic_and_carries_no_platform_references() {
     for file in [
         "Cargo.toml",
         "README.md",
+        "LICENSE",
         "deny.toml",
         ".pre-commit-config.yaml",
     ] {
@@ -291,5 +292,7 @@ fn test_cargo_manifest_is_ready_for_crates_io() {
         );
     }
     assert_eq!(package["name"].as_str(), Some("stream-replay-rs"));
+    assert_eq!(package["license"].as_str(), Some("MIT"));
+    assert!(manifest_path("LICENSE").is_file(), "LICENSE file must exist");
     assert!(package["keywords"].as_array().unwrap().len() <= 5);
 }

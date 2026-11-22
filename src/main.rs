@@ -345,26 +345,26 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "kafka")]
+    #[cfg(feature = "iggy")]
     #[test]
-    fn sink_flag_supports_iggy_alias() {
+    fn sink_flag_supports_iggy() {
         let cfg = build_config(
             parse(&[
                 "--sink",
                 "iggy",
                 "--sink-url",
-                "localhost:9092",
+                "http://127.0.0.1:3000",
                 "--topic",
-                "events",
+                "orders/intake",
             ])
             .unwrap(),
         )
         .unwrap();
         assert_eq!(
             cfg.sink,
-            SinkType::Kafka {
-                broker_url: "localhost:9092".to_string(),
-                topic: "events".to_string()
+            SinkType::Iggy {
+                url: "http://127.0.0.1:3000".to_string(),
+                destination: "orders/intake".to_string()
             }
         );
     }

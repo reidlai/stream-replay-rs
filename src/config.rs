@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SINK_URL: &str = "localhost:9092";
+pub const DEFAULT_IGGY_URL: &str = "http://127.0.0.1:3000";
 pub const DEFAULT_NATS_URL: &str = "nats://localhost:4222";
 pub const DEFAULT_FLUVIO_URL: &str = "localhost:9003";
 pub const DEFAULT_TOPIC: &str = "events";
@@ -148,7 +149,7 @@ pub fn parse_speed_preset(val: &str) -> Result<f64, ReplayError> {
 /// Build a [`SinkType`] from its parts (unused parts are ignored by the chosen sink).
 pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkType, ReplayError> {
     match kind.to_lowercase().as_str() {
-        "kafka" | "iggy" => {
+        "kafka" => {
             #[cfg(feature = "kafka")]
             {
                 Ok(SinkType::Kafka {
@@ -161,6 +162,34 @@ pub fn sink_from_parts(kind: &str, url: String, topic: String) -> Result<SinkTyp
                 let _ = (url, topic);
                 Err(ReplayError::Config(
                     "Kafka sink requested, but stream-replay-rs was compiled without '--features kafka'".into(),
+                ))
+            }
+        }
+        "iggy" => {
+            #[cfg(feature = "iggy")]
+            {
+                let destination = topic.trim().to_string();
+                if destination.is_empty() {
+                    return Err(ReplayError::Config(
+                        "Iggy destination must not be empty".into(),
+                    ));
+                }
+                let trimmed_url = url.trim();
+                let resolved_url = if trimmed_url.is_empty() || trimmed_url == DEFAULT_SINK_URL {
+                    DEFAULT_IGGY_URL.to_string()
+                } else {
+                    trimmed_url.to_string()
+                };
+                Ok(SinkType::Iggy {
+                    url: resolved_url,
+                    destination,
+                })
+            }
+            #[cfg(not(feature = "iggy"))]
+            {
+                let _ = (url, topic);
+                Err(ReplayError::Config(
+                    "Iggy sink requested, but stream-replay-rs was compiled without '--features iggy'".into(),
                 ))
             }
         }
@@ -258,6 +287,8 @@ pub fn sink_parts(sink: &SinkType) -> (String, String, String) {
         SinkType::Kafka { broker_url, topic } => {
             ("kafka".into(), broker_url.clone(), topic.clone())
         }
+        #[cfg(feature = "iggy")]
+        SinkType::Iggy { url, destination } => ("iggy".into(), url.clone(), destination.clone()),
         #[cfg(feature = "nats")]
         SinkType::Nats { url, subject } => ("nats".into(), url.clone(), subject.clone()),
         #[cfg(feature = "fluvio")]
@@ -350,6 +381,15 @@ impl ReplayConfigBuilder {
         self.config.sink = SinkType::Kafka {
             broker_url: broker_url.into(),
             topic: topic.into(),
+        };
+        self
+    }
+
+    #[cfg(feature = "iggy")]
+    pub fn iggy_sink(mut self, url: impl Into<String>, destination: impl Into<String>) -> Self {
+        self.config.sink = SinkType::Iggy {
+            url: url.into().trim().to_string(),
+            destination: destination.into().trim().to_string(),
         };
         self
     }

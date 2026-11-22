@@ -70,7 +70,7 @@ destination = "replayed"
     );
 }
 
-#[cfg(feature = "kafka")]
+#[cfg(feature = "iggy")]
 #[test]
 fn test_sectioned_profile_with_iggy_sink() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -82,8 +82,8 @@ input_path = "events.csv"
 
 [sink]
 default_type = "iggy"
-default_url = "localhost:9092"
-destination = "replayed"
+default_url = "http://127.0.0.1:3000"
+destination = "orders/intake"
 "#
     )
     .unwrap();
@@ -91,9 +91,9 @@ destination = "replayed"
     let cfg = ReplayConfig::from_profile_file(tmp.path()).unwrap();
     assert_eq!(
         cfg.sink,
-        SinkType::Kafka {
-            broker_url: "localhost:9092".to_string(),
-            topic: "replayed".to_string()
+        SinkType::Iggy {
+            url: "http://127.0.0.1:3000".to_string(),
+            destination: "orders/intake".to_string()
         }
     );
 }
@@ -145,7 +145,7 @@ loop_playback = true
     );
 }
 
-#[cfg(feature = "kafka")]
+#[cfg(feature = "iggy")]
 #[test]
 fn test_flat_profile_with_iggy_sink() {
     let mut tmp = NamedTempFile::new().unwrap();
@@ -154,17 +154,17 @@ fn test_flat_profile_with_iggy_sink() {
         r#"
 input_file_path = "events.csv"
 sink = "iggy"
-sink_url = "iggy-broker:9092"
-topic = "stream-topic"
+sink_url = "http://iggy-broker:3000"
+topic = "orders/intake"
 "#
     )
     .unwrap();
     let cfg = ReplayConfig::from_profile_file(tmp.path()).unwrap();
     assert_eq!(
         cfg.sink,
-        SinkType::Kafka {
-            broker_url: "iggy-broker:9092".to_string(),
-            topic: "stream-topic".to_string()
+        SinkType::Iggy {
+            url: "http://iggy-broker:3000".to_string(),
+            destination: "orders/intake".to_string()
         }
     );
 }

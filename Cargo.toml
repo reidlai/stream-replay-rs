@@ -26,6 +26,8 @@ csv = "1.3"
 arrow = { version = "59.3.2", default-features = false }
 parquet = { version = "59.3.2", default-features = false, features = ["arrow"] }
 rskafka = { version = "0.6.0", default-features = false, optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+base64 = { version = "0.22", optional = true }
 async-nats = { version = "0.52.0", optional = true }
 iceoryx2 = { version = "0.10.0", optional = true }
 fluvio = { version = "0.50.1", optional = true }
@@ -35,12 +37,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 
 [features]
-default = ["kafka"]
+default = ["kafka", "iggy"]
 kafka = ["dep:rskafka"]
+iggy = ["dep:reqwest", "dep:base64"]
 nats = ["dep:async-nats"]
 fluvio = ["dep:fluvio"]
 iceoryx2 = ["dep:iceoryx2"]
-full = ["kafka", "nats", "fluvio", "iceoryx2"]
+full = ["kafka", "iggy", "nats", "fluvio", "iceoryx2"]
 
 [dev-dependencies]
 tempfile = "3.12"

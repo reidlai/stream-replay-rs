@@ -114,16 +114,25 @@ fn test_compiled_kafka_sink_dispatch() {
     assert_eq!(kind, "kafka");
     assert_eq!(url, "broker:9092");
     assert_eq!(topic, "events");
+}
 
-    // Test iggy alias
-    let iggy = sink_from_parts("iggy", "localhost:9092".into(), "stream".into()).unwrap();
+#[cfg(feature = "iggy")]
+#[test]
+fn test_compiled_iggy_sink_dispatch() {
+    let iggy = sink_from_parts("iggy", "http://127.0.0.1:3000".into(), "orders/intake".into()).unwrap();
     assert_eq!(
         iggy,
-        SinkType::Kafka {
-            broker_url: "localhost:9092".into(),
-            topic: "stream".into(),
+        SinkType::Iggy {
+            url: "http://127.0.0.1:3000".into(),
+            destination: "orders/intake".into(),
         }
     );
+    assert_eq!(iggy.destination(), "orders/intake");
+
+    let (kind, url, dest) = sink_parts(&iggy);
+    assert_eq!(kind, "iggy");
+    assert_eq!(url, "http://127.0.0.1:3000");
+    assert_eq!(dest, "orders/intake");
 }
 
 #[cfg(feature = "nats")]

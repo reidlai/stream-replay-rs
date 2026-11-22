@@ -2,6 +2,8 @@
 pub mod fluvio;
 #[cfg(feature = "iceoryx2")]
 pub mod iceoryx2;
+#[cfg(feature = "iggy")]
+pub mod iggy;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "nats")]
@@ -50,6 +52,12 @@ pub enum SinkType {
         broker_url: String,
         topic: String,
     },
+    #[cfg(feature = "iggy")]
+    Iggy {
+        url: String,
+        #[serde(alias = "topic")]
+        destination: String,
+    },
     #[cfg(feature = "nats")]
     Nats {
         url: String,
@@ -77,6 +85,8 @@ impl SinkType {
         match self {
             #[cfg(feature = "kafka")]
             SinkType::Kafka { topic, .. } => topic,
+            #[cfg(feature = "iggy")]
+            SinkType::Iggy { destination, .. } => destination,
             #[cfg(feature = "nats")]
             SinkType::Nats { subject, .. } => subject,
             #[cfg(feature = "fluvio")]
@@ -93,6 +103,8 @@ pub async fn create_sink(sink_type: &SinkType) -> Result<Box<dyn Sink>, ReplayEr
         SinkType::Stdout { topic } => Ok(Box::new(stdout::StdoutSink::new(topic))),
         #[cfg(feature = "kafka")]
         SinkType::Kafka { broker_url, topic } => kafka::create_kafka_sink(broker_url, topic).await,
+        #[cfg(feature = "iggy")]
+        SinkType::Iggy { url, destination } => iggy::create_iggy_sink(url, destination).await,
         #[cfg(feature = "nats")]
         SinkType::Nats { url, subject } => nats::create_nats_sink(url, subject).await,
         #[cfg(feature = "fluvio")]

@@ -41,6 +41,7 @@ pub struct ReplaySection {
     #[serde(alias = "advance_loop_timestamps")]
     pub advance_timestamps: Option<bool>,
     pub loop_id_salt: Option<bool>,
+    pub max_records: Option<u64>,
 }
 
 /// `[sink]` table of a replay profile.
@@ -84,6 +85,7 @@ pub struct ProfileConfig {
     pub loop_playback: Option<bool>,
     pub advance_loop_timestamps: Option<bool>,
     pub loop_id_salt: Option<bool>,
+    pub max_records: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +110,7 @@ pub struct ReplayConfig {
     pub advance_loop_timestamps: bool,
     pub loop_id_salt: bool,
     pub progress: bool,
-    /// Stop after emitting this many records (library use; there is no CLI flag).
+    /// Stop after emitting this many records (`None` means unbounded).
     pub max_records: Option<u64>,
 }
 
@@ -683,7 +685,7 @@ impl ReplayConfig {
                 .or(profile.loop_id_salt)
                 .unwrap_or(false),
             progress: true,
-            max_records: None,
+            max_records: replay.max_records.or(profile.max_records),
         })
     }
 }

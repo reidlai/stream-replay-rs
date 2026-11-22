@@ -78,8 +78,16 @@ pub struct CliArgs {
     pub key_column: Option<String>,
 
     /// Loop replay indefinitely upon reaching EOF
-    #[arg(long, default_value_t = false)]
+    #[arg(long, overrides_with = "no_loop")]
     pub r#loop: bool,
+
+    /// Play the dataset once and exit at EOF (overrides `loop = true` in a profile)
+    #[arg(long, overrides_with = "loop")]
+    pub no_loop: bool,
+
+    /// Stop after emitting at most N records (bounds even looping profiles)
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_records: Option<u64>,
 
     /// Monotonically advance timestamps on subsequent loop iterations
     #[arg(long, default_value_t = false)]
@@ -162,8 +170,13 @@ pub fn build_config(args: CliArgs) -> Result<ReplayConfig, ReplayError> {
         cfg.key_column = Some(k);
     }
 
-    if args.r#loop {
+    if args.no_loop {
+        cfg.loop_playback = false;
+    } else if args.r#loop {
         cfg.loop_playback = true;
+    }
+    if let Some(max_records) = args.max_records {
+        cfg.max_records = Some(max_records);
     }
     if args.advance_loop_timestamps {
         cfg.advance_loop_timestamps = true;
@@ -200,9 +213,13 @@ async fn main() {
         Some(rate) => format!("rate={rate}/s"),
         None => format!("speed={}x", config.speed_multiplier),
     };
+    let limit = match config.max_records {
+        Some(n) => format!(", max_records={n}"),
+        None => String::new(),
+    };
     info!(
-        "Starting stream-replay-rs: input={:?}, sink={:?}, {}, loop={}",
-        config.input_file_path, config.sink, pacing, config.loop_playback
+        "Starting stream-replay-rs: input={:?}, sink={:?}, {}, loop={}{}",
+        config.input_file_path, config.sink, pacing, config.loop_playback, limit
     );
 
     match ReplayEngine::new(config).await {
@@ -431,5 +448,64 @@ mod tests {
     fn missing_input_is_an_error() {
         let args = CliArgs::try_parse_from(["stream-replay-rs"]).unwrap();
         assert!(build_config(args).is_err());
+    }
+
+    #[test]
+    fn no_loop_and_max_records_override_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = dir.path().join("looping.toml");
+        std::fs::write(
+            &profile_path,
+            r#"
+[dataset]
+input_path = "events.csv"
+
+[replay]
+loop = true
+"#,
+        )
+        .unwrap();
+
+        let profile_str = profile_path.to_str().unwrap();
+
+        // Profile alone enables looping with no record cap
+        let cfg = build_config(
+            CliArgs::try_parse_from(["stream-replay-rs", "--config", profile_str]).unwrap(),
+        )
+        .unwrap();
+        assert!(cfg.loop_playback);
+        assert_eq!(cfg.max_records, None);
+
+        // --no-loop disables profile's loop = true
+        let cfg = build_config(
+            CliArgs::try_parse_from(["stream-replay-rs", "--config", profile_str, "--no-loop"])
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!cfg.loop_playback);
+
+        // --loop and --no-loop override each other based on last flag
+        let cfg = build_config(parse(&["--loop", "--no-loop"]).unwrap()).unwrap();
+        assert!(!cfg.loop_playback);
+        let cfg = build_config(parse(&["--no-loop", "--loop"]).unwrap()).unwrap();
+        assert!(cfg.loop_playback);
+
+        // --max-records caps total emitted records even with loop = true
+        let cfg = build_config(
+            CliArgs::try_parse_from([
+                "stream-replay-rs",
+                "--config",
+                profile_str,
+                "--max-records",
+                "100",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(cfg.loop_playback);
+        assert_eq!(cfg.max_records, Some(100));
+
+        // --max-records 0 is rejected
+        assert!(parse(&["--max-records", "0"]).is_err());
     }
 }
